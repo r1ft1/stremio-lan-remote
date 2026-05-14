@@ -1,3 +1,12 @@
+import { deflateSync } from 'node:zlib';
+
+function encodePlayerHash(streamObject) {
+  const json = JSON.stringify(streamObject);
+  const compressed = deflateSync(Buffer.from(json, 'utf8'), { level: 0 });
+  const b64 = compressed.toString('base64');
+  return '#/player/' + encodeURIComponent(b64);
+}
+
 export function encodePlayerLoad({ stream, metaId, videoId, type }) {
   const streamObject = {
     name: stream.name ?? '',
@@ -40,7 +49,7 @@ export function encodePlayerLoad({ stream, metaId, videoId, type }) {
       },
     },
     field: 'player',
-    locationHash: '',
+    locationHash: encodePlayerHash(streamObject),
   };
 }
 
