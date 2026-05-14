@@ -83,6 +83,18 @@ impl WebView {
             });
     }
 
+    pub fn exec_js(&self, script: &str) {
+        let widget = self.imp();
+
+        widget
+            .webview
+            .evaluate_javascript(script, None, None, Cancellable::NONE, |result| {
+                if let Err(e) = result {
+                    error!("Failed to exec script: {e}");
+                }
+            });
+    }
+
     pub fn connect_ipc<T: Fn(WebView, &str) + 'static>(&self, callback: T) {
         let widget = self.imp();
         let webview = self;

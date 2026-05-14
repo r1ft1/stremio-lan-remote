@@ -1,5 +1,6 @@
 mod app;
 mod config;
+mod lan_remote;
 mod server;
 mod utils;
 

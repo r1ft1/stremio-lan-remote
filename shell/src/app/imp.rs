@@ -1,7 +1,9 @@
 use std::cell::{Cell, RefCell};
+use std::net::SocketAddr;
 
 use adw::{prelude::*, subclass::prelude::*};
 use gtk::glib::{self, Properties, clone};
+use tracing::error;
 
 use crate::app::{
     config::URI_SCHEME,
@@ -14,6 +16,7 @@ use crate::app::{
     webview::WebView,
     window::Window,
 };
+use crate::lan_remote;
 
 const PRELOAD_SCRIPT: &str = include_str!("ipc/preload.js");
 const LAN_REMOTE_SCRIPT: &str = include_str!("../injected.js");
@@ -72,6 +75,23 @@ impl ApplicationImpl for Application {
         webview.inject_script(PRELOAD_SCRIPT);
         webview.inject_script(LAN_REMOTE_SCRIPT);
         webview.dev_mode(dev_mode);
+
+        let (lan_tx, lan_rx) = flume::bounded::<String>(64);
+        let lan_addr: SocketAddr = "127.0.0.1:7001".parse().expect("invalid lan_remote addr");
+        tokio::spawn(async move {
+            if let Err(e) = lan_remote::serve(lan_addr, lan_tx).await {
+                error!("lan_remote server error: {e}");
+            }
+        });
+
+        let webview_for_lan = webview.clone();
+        glib::MainContext::default().spawn_local(async move {
+            while let Ok(json) = lan_rx.recv_async().await {
+                let escaped = json.replace('\\', "\\\\").replace('`', "\\`");
+                let script = format!("window.__lanRemote && window.__lanRemote.cmd(`{}`);", escaped);
+                webview_for_lan.exec_js(&script);
+            }
+        });
 
         let window = Window::new(&app);
         window.set_property("decorations", self.decorations.get());
