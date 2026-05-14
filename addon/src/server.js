@@ -23,12 +23,14 @@ export function createServer({
 
   app.get('/cast', async (req, res) => {
     try {
-      const { id, season, episode } = req.query;
+      const { id, season, episode, stream: streamToken } = req.query;
       const isSeries = season != null;
       const type = isSeries ? 'series' : 'movie';
       const videoId = isSeries ? `${id}:${season}:${episode}` : id;
 
-      const stream = await resolver({ type, id: videoId });
+      const stream = streamToken
+        ? JSON.parse(Buffer.from(streamToken, 'base64url').toString('utf8'))
+        : await resolver({ type, id: videoId });
       const action = encodePlayerLoad({ stream, metaId: id, videoId, type });
 
       const dispatchRes = await fetchFn(`http://${shellHost}/dispatch`, {

@@ -47,6 +47,17 @@ describe('cast endpoint', () => {
     const res = await request(app).get('/cast?id=tt0');
     expect(res.status).toBe(502);
   });
+
+  it('uses pre-encoded stream token when provided (no resolver call)', async () => {
+    const stream = { infoHash: 'abc', fileIdx: 5, name: 'Picked stream', announce: [] };
+    const token = Buffer.from(JSON.stringify(stream), 'utf8').toString('base64url');
+    const res = await request(app).get(`/cast?id=tt0111161&stream=${token}`);
+    expect(res.status).toBe(200);
+    expect(resolver).not.toHaveBeenCalled();
+    expect(shellPosts).toHaveLength(1);
+    expect(shellPosts[0].body.action.args.args.stream.infoHash).toBe('abc');
+    expect(shellPosts[0].body.action.args.args.stream.fileIdx).toBe(5);
+  });
 });
 
 describe('manifest served by Express server', () => {
