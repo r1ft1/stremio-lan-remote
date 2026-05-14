@@ -1,0 +1,47 @@
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Release version (e.g. 0.1.0)'
+        required: true
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      VERSION: ${{ inputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install deps
+        run: |
+          sudo apt update
+          sudo apt install -y flatpak flatpak-builder nodejs npm
+          sudo flatpak remote-add --if-not-exists flathub https://flathub.org/repo/flathub.flatpakrepo
+          sudo flatpak install -y flathub org.gnome.Platform//50 org.gnome.Sdk//50
+
+      - name: Build bootstrap
+        run: |
+          cd bootstrap && npm ci && npm run build && cp dist/injected.js ../shell/src/injected.js
+
+      - name: Build Flatpak bundle
+        run: |
+          cd shell
+          flatpak-builder --repo=repo --force-clean build-dir flatpak/dev.stremiolanremote.Stremio.json
+          flatpak build-bundle repo ../stremio-lan-remote-${VERSION}.flatpak dev.stremiolanremote.Stremio
+
+      - name: Package addon
+        run: tar czf addon-${VERSION}.tar.gz addon packaging
+
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "v${VERSION}" \
+            "stremio-lan-remote-${VERSION}.flatpak" \
+            "addon-${VERSION}.tar.gz" \
+            --title "v${VERSION}" --generate-notes
