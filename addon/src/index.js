@@ -4,7 +4,7 @@ import { resolveAllStreams } from './resolver.js';
 
 export const manifest = {
   id: 'dev.stremiolanremote.addon',
-  version: '0.2.0',
+  version: '0.3.0',
   name: 'LAN Remote',
   description: 'Cast playback to a Stremio LAN Remote desktop',
   resources: ['stream'],
@@ -17,12 +17,18 @@ function encodeStreamToken(stream) {
   return Buffer.from(JSON.stringify(stream), 'utf8').toString('base64url');
 }
 
+function seederCount(stream) {
+  const text = `${stream.title || ''} ${stream.description || ''}`;
+  const m = text.match(/👤\s*(\d+)/);
+  return m ? parseInt(m[1], 10) : 0;
+}
+
 function streamLabel(stream) {
-  const parts = [];
-  if (stream.name) parts.push(stream.name.replace(/\n/g, ' • '));
-  if (stream.title) parts.push(stream.title.split('\n')[0]);
-  if (stream.description && parts.length < 2) parts.push(stream.description.split('\n')[0]);
-  return parts.join(' — ').slice(0, 200);
+  const seeders = seederCount(stream);
+  const quality = stream.name ? stream.name.replace(/\n/g, ' • ') : '';
+  const filename = (stream.title || stream.description || '').split('\n')[0];
+  const seederTag = seeders > 0 ? ` • 👤 ${seeders}` : '';
+  return `${quality}${seederTag} — ${filename}`.slice(0, 200);
 }
 
 function castEntryFor({ stream, type, id, publicHost }) {
@@ -50,8 +56,9 @@ builder.defineStreamHandler(async ({ type, id }) => {
   } catch (e) {
     return { streams: [] };
   }
+  const sorted = [...streams].sort((a, b) => seederCount(b) - seederCount(a));
   return {
-    streams: streams.map((s) => castEntryFor({ stream: s, type, id, publicHost: config.publicHost })),
+    streams: sorted.map((s) => castEntryFor({ stream: s, type, id, publicHost: config.publicHost })),
   };
 });
 
