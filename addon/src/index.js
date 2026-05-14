@@ -4,7 +4,7 @@ import { resolveAllStreams } from './resolver.js';
 
 export const manifest = {
   id: 'dev.stremiolanremote.addon',
-  version: '0.1.0',
+  version: '0.2.0',
   name: 'LAN Remote',
   description: 'Cast playback to a Stremio LAN Remote desktop',
   resources: ['stream'],
