@@ -56,4 +56,21 @@ describe('stream handler', () => {
     const res = await addonInterface.get('stream', 'movie', 'tt2222004');
     expect(res.streams).toEqual([]);
   });
+
+  it('sorts by seeder count descending and shows 👤 N in the name', async () => {
+    throwInResolver = false;
+    mockStreams = [
+      { name: 'Torrentio\n720p', title: 'low.mkv\n👤 5 💾 1 GB', infoHash: 'low', fileIdx: 0 },
+      { name: 'Torrentio\n4k', title: 'high.mkv\n👤 200 💾 60 GB', infoHash: 'high', fileIdx: 0 },
+      { name: 'Torrentio\n1080p', title: 'mid.mkv\n👤 50 💾 5 GB', infoHash: 'mid', fileIdx: 0 },
+    ];
+    const res = await addonInterface.get('stream', 'movie', 'tt2222005');
+    expect(res.streams).toHaveLength(3);
+    expect(res.streams[0].name).toMatch(/👤 200/);
+    expect(res.streams[1].name).toMatch(/👤 50/);
+    expect(res.streams[2].name).toMatch(/👤 5/);
+    const url0 = new URL(res.streams[0].externalUrl).searchParams.get('stream');
+    const decoded0 = JSON.parse(Buffer.from(url0, 'base64url').toString('utf8'));
+    expect(decoded0.infoHash).toBe('high');
+  });
 });
