@@ -1,0 +1,16 @@
+[Unit]
+Description=Stremio LAN Remote Addon
+After=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/.local/share/stremio-lan-remote/addon
+ExecStart=/usr/bin/node bin/start.js
+Restart=on-failure
+RestartSec=5s
+Environment="STREAM_RESOLVER_URL=https://torrentio.strem.fun"
+Environment="SHELL_HOST=127.0.0.1:7001"
+Environment="BIND=0.0.0.0:7000"
+
+[Install]
+WantedBy=default.target
