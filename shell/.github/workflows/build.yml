@@ -1,0 +1,37 @@
+name: Build
+
+on:
+  push:
+    branches:
+      - '**'
+    tags-ignore:
+      - '**'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    container:
+      image: ubuntu:resolute
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Install dependencies
+        run: |
+          apt-get -y update
+          apt-get -y install build-essential curl libssl-dev \
+            libgtk-4-dev libadwaita-1-dev libwebkitgtk-6.0-dev libmpv-dev gettext nodejs
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with: 
+          components: rustfmt, clippy
+
+      - name: Lint fmt
+        run: cargo fmt --all -- --check
+
+      - name: Lint clippy
+        run: cargo clippy --all --no-deps -- -D warnings
+
+      - name: Build
+        run: cargo build
