@@ -16,6 +16,7 @@ use crate::app::{
 };
 
 const PRELOAD_SCRIPT: &str = include_str!("ipc/preload.js");
+const LAN_REMOTE_SCRIPT: &str = include_str!("../injected.js");
 
 #[derive(Properties, Default)]
 #[properties(wrapper_type = super::Application)]
@@ -69,6 +70,7 @@ impl ApplicationImpl for Application {
         let webview = WebView::default();
         webview.load_uri(&startup_url);
         webview.inject_script(PRELOAD_SCRIPT);
+        webview.inject_script(LAN_REMOTE_SCRIPT);
         webview.dev_mode(dev_mode);
 
         let window = Window::new(&app);
