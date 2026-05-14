@@ -1,35 +1,37 @@
 (() => {
   // src/installBootstrap.js
   function installBootstrap(window) {
-    const WA = window.WebAssembly;
-    const origInstantiate = WA.instantiate;
-    const origInstantiateStreaming = WA.instantiateStreaming;
     window.__lanRemote = window.__lanRemote || {};
-    function capture(result) {
-      const instance = result && (result.instance || result);
-      if (instance && instance.exports && typeof instance.exports.dispatch === "function") {
-        window.__lanRemote.dispatch = instance.exports.dispatch;
-        window.__lanRemote.getState = instance.exports.getState;
-      }
-    }
-    WA.instantiate = async function(...args) {
-      const result = await origInstantiate.apply(this, args);
-      capture(result);
-      return result;
-    };
-    if (typeof origInstantiateStreaming === "function") {
-      WA.instantiateStreaming = async function(...args) {
-        const result = await origInstantiateStreaming.apply(this, args);
-        capture(result);
-        return result;
+    let coreWorker = null;
+    let nextId = 1;
+    if (typeof window.Worker === "function") {
+      let PatchedWorker = function(scriptURL, options) {
+        const w = new OrigWorker(scriptURL, options);
+        if (String(scriptURL).includes("worker.js") && !coreWorker) {
+          coreWorker = w;
+        }
+        return w;
       };
+      const OrigWorker = window.Worker;
+      PatchedWorker.prototype = OrigWorker.prototype;
+      window.Worker = PatchedWorker;
     }
-    window.__lanRemote.cmd = function(json) {
-      if (!window.__lanRemote.dispatch) {
-        throw new Error("lan-remote: dispatch not captured yet");
+    window.__lanRemote.dispatch = function(action, field, locationHash) {
+      if (!coreWorker) {
+        throw new Error("lan-remote: core worker not yet created");
       }
+      const id = "lanremote_" + nextId++;
+      coreWorker.postMessage({
+        request: {
+          id,
+          path: ["dispatch"],
+          args: [action, field == null ? null : field, locationHash || ""]
+        }
+      });
+    };
+    window.__lanRemote.cmd = function(json) {
       const { action, field, locationHash } = JSON.parse(json);
-      return window.__lanRemote.dispatch(action, field || "", locationHash || "");
+      return window.__lanRemote.dispatch(action, field == null ? null : field, locationHash || "");
     };
   }
 

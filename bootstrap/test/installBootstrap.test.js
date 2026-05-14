@@ -2,70 +2,80 @@ import { describe, it, expect, vi } from 'vitest';
 import { installBootstrap } from '../src/installBootstrap.js';
 
 function fakeWindow() {
-  return {
-    WebAssembly: {
-      instantiate: async () => ({ instance: { exports: { dispatch: () => {}, getState: () => {} } } }),
-      instantiateStreaming: async () => ({ instance: { exports: { dispatch: () => {}, getState: () => {} } } }),
-    },
-  };
+  class MockWorker {
+    constructor(url) {
+      this.url = String(url);
+      this.postMessage = vi.fn();
+    }
+  }
+  return { Worker: MockWorker };
 }
 
-describe('installBootstrap WASM hook', () => {
-  it('captures dispatch from WebAssembly.instantiate', async () => {
+describe('installBootstrap', () => {
+  it('captures the core worker when constructed with a worker.js URL', () => {
     const win = fakeWindow();
     installBootstrap(win);
-    await win.WebAssembly.instantiate({}, {});
-    expect(win.__lanRemote.dispatch).toBeDefined();
+    const w = new win.Worker('https://example.com/scripts/worker.js');
+    expect(win.__lanRemote).toBeDefined();
+    win.__lanRemote.dispatch({ action: 'Search' }, null, '#/search');
+    expect(w.postMessage).toHaveBeenCalledTimes(1);
   });
 
-  it('captures dispatch from WebAssembly.instantiateStreaming', async () => {
+  it('does not capture a non-worker.js worker', () => {
     const win = fakeWindow();
     installBootstrap(win);
-    await win.WebAssembly.instantiateStreaming({}, {});
-    expect(win.__lanRemote.dispatch).toBeDefined();
+    new win.Worker('https://example.com/other.js');
+    expect(() => win.__lanRemote.dispatch({}, null, '')).toThrow(/not yet created/);
   });
 
-  it('ignores instances without dispatch export', async () => {
+  it('keeps the original Worker prototype', () => {
     const win = fakeWindow();
-    win.WebAssembly.instantiate = async () => ({ instance: { exports: {} } });
+    const origProto = win.Worker.prototype;
     installBootstrap(win);
-    await win.WebAssembly.instantiate({}, {});
-    expect(win.__lanRemote.dispatch).toBeUndefined();
-  });
-
-  it('still works if window has no instantiateStreaming', async () => {
-    const win = fakeWindow();
-    delete win.WebAssembly.instantiateStreaming;
-    installBootstrap(win);
-    await win.WebAssembly.instantiate({}, {});
-    expect(win.__lanRemote.dispatch).toBeDefined();
+    expect(win.Worker.prototype).toBe(origProto);
   });
 });
 
-describe('cmd dispatcher', () => {
-  it('forwards parsed action to captured dispatch', async () => {
+describe('dispatch envelope', () => {
+  it('wraps action+field+locationHash in JSON-RPC request shape', () => {
     const win = fakeWindow();
-    const dispatch = vi.fn();
-    win.WebAssembly.instantiate = async () => ({ instance: { exports: { dispatch, getState: () => {} } } });
     installBootstrap(win);
-    await win.WebAssembly.instantiate({}, {});
-
-    win.__lanRemote.cmd(JSON.stringify({
-      action: { Search: { search_query: 'foo', max_results: 10 } },
-      field: '',
-      locationHash: '#/search',
-    }));
-
-    expect(dispatch).toHaveBeenCalledWith(
-      { Search: { search_query: 'foo', max_results: 10 } },
-      '',
+    const w = new win.Worker('worker.js');
+    win.__lanRemote.dispatch(
+      { action: 'Search', args: { action: 'Search', args: { searchQuery: 'foo', maxResults: 5 } } },
+      null,
       '#/search',
     );
+    const sent = w.postMessage.mock.calls[0][0];
+    expect(sent.request.path).toEqual(['dispatch']);
+    expect(sent.request.args[0]).toEqual({
+      action: 'Search',
+      args: { action: 'Search', args: { searchQuery: 'foo', maxResults: 5 } },
+    });
+    expect(sent.request.args[1]).toBe(null);
+    expect(sent.request.args[2]).toBe('#/search');
+    expect(typeof sent.request.id).toBe('string');
   });
 
-  it('throws if cmd is called before dispatch is captured', () => {
+  it('throws if called before worker is created', () => {
     const win = fakeWindow();
     installBootstrap(win);
-    expect(() => win.__lanRemote.cmd('{"action":{}}')).toThrow();
+    expect(() => win.__lanRemote.dispatch({}, null, '')).toThrow(/not yet created/);
+  });
+});
+
+describe('cmd JSON wrapper', () => {
+  it('forwards parsed JSON to dispatch', () => {
+    const win = fakeWindow();
+    installBootstrap(win);
+    const w = new win.Worker('worker.js');
+    win.__lanRemote.cmd(JSON.stringify({
+      action: { action: 'Search', args: { action: 'Search', args: { searchQuery: 'x', maxResults: 5 } } },
+      field: null,
+      locationHash: '#/search',
+    }));
+    const sent = w.postMessage.mock.calls[0][0];
+    expect(sent.request.args[0].action).toBe('Search');
+    expect(sent.request.args[2]).toBe('#/search');
   });
 });
