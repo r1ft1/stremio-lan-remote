@@ -41,3 +41,31 @@ describe('installBootstrap WASM hook', () => {
     expect(win.__lanRemote.dispatch).toBeDefined();
   });
 });
+
+describe('cmd dispatcher', () => {
+  it('forwards parsed action to captured dispatch', async () => {
+    const win = fakeWindow();
+    const dispatch = vi.fn();
+    win.WebAssembly.instantiate = async () => ({ instance: { exports: { dispatch, getState: () => {} } } });
+    installBootstrap(win);
+    await win.WebAssembly.instantiate({}, {});
+
+    win.__lanRemote.cmd(JSON.stringify({
+      action: { Search: { search_query: 'foo', max_results: 10 } },
+      field: '',
+      locationHash: '#/search',
+    }));
+
+    expect(dispatch).toHaveBeenCalledWith(
+      { Search: { search_query: 'foo', max_results: 10 } },
+      '',
+      '#/search',
+    );
+  });
+
+  it('throws if cmd is called before dispatch is captured', () => {
+    const win = fakeWindow();
+    installBootstrap(win);
+    expect(() => win.__lanRemote.cmd('{"action":{}}')).toThrow();
+  });
+});

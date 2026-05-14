@@ -26,4 +26,12 @@ export function installBootstrap(window) {
       return result;
     };
   }
+
+  window.__lanRemote.cmd = function (json) {
+    if (!window.__lanRemote.dispatch) {
+      throw new Error('lan-remote: dispatch not captured yet');
+    }
+    const { action, field, locationHash } = JSON.parse(json);
+    return window.__lanRemote.dispatch(action, field || '', locationHash || '');
+  };
 }
