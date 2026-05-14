@@ -1,0 +1,25 @@
+name: Upstream rebase
+
+on:
+  schedule:
+    - cron: '0 4 * * *'
+  workflow_dispatch:
+
+jobs:
+  rebase:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      issues: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Configure git
+        run: |
+          git config user.name 'lan-remote-bot'
+          git config user.email 'bot@local'
+      - name: Run rebase script
+        run: ./.github/scripts/rebase-and-report.sh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
