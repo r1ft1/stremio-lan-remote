@@ -1,0 +1,99 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+    <id>com.stremio.Stremio</id>
+    <name>Stremio</name>
+    <summary>Freedom to Stream</summary>
+    <description>
+        <p>Stremio offers a secure, modern and seamless entertainment experience.</p>
+        <p>With its easy-to-use interface and diverse content library, including 4K HDR support, users can enjoy their favorite movies and TV shows across all their devices.</p>
+        <p>And with its commitment to security, Stremio is the ultimate choice for a worry-free, high-quality streaming experience.</p>
+    </description>
+    <developer id="com.stremio">
+        <name>Stremio</name>
+    </developer>
+
+    <branding>
+        <color type="primary" scheme_preference="light">#9C97D8</color>
+        <color type="primary" scheme_preference="dark">#2E286D</color>
+    </branding>
+
+    <screenshots>
+        <screenshot type="default">
+            <image>
+                https://raw.githubusercontent.com/Stremio/stremio-linux-shell/refs/heads/main/data/screenshots/screenshot1.png
+            </image>
+            <caption>Home page</caption>
+        </screenshot>
+        <screenshot>
+            <image>
+                https://raw.githubusercontent.com/Stremio/stremio-linux-shell/refs/heads/main/data/screenshots/screenshot2.png
+            </image>
+            <caption>Details page</caption>
+        </screenshot>
+        <screenshot>
+            <image>
+                https://raw.githubusercontent.com/Stremio/stremio-linux-shell/refs/heads/main/data/screenshots/screenshot3.png
+            </image>
+            <caption>Player page</caption>
+        </screenshot>
+    </screenshots>
+
+    <metadata_license>MIT</metadata_license>
+    <project_license>GPL-3.0-only</project_license>
+    <content_rating type="oars-1.1" />
+
+    <url type="homepage">https://github.com/Stremio/stremio-linux-shell</url>
+    <url type="bugtracker">https://github.com/Stremio/stremio-linux-shell/issues</url>
+
+    <translation type="gettext">stremio</translation>
+
+    <launchable type="desktop-id">com.stremio.Stremio.desktop</launchable>
+
+    <releases>
+        <release version="1.0.0-beta.13" date="2026-01-09">
+            <description>
+                <ul>
+                    <li>Update server</li>
+                </ul>
+            </description>
+        </release>
+        <release version="1.0.0-beta.12" date="2025-11-27">
+            <description>
+                <ul>
+                    <li>Update server</li>
+                </ul>
+            </description>
+        </release>
+        <release version="1.0.0-beta.11" date="2025-06-26">
+            <description>
+                <ul>
+                    <li>Add spanish locale for system tray</li>
+                </ul>
+            </description>
+        </release>
+        <release version="1.0.0-beta.10" date="2025-06-14">
+            <description>
+                <ul>
+                    <li>Fix player load issue with some streams</li>
+                    <li>Allow to zoom in-out with keyboard</li>
+                </ul>
+            </description>
+        </release>
+        <release version="1.0.0-beta.9" date="2025-06-08">
+            <description>
+                <ul>
+                    <li>Fix missing tray icon</li>
+                    <li>Remember maximized window state after hiding</li>
+                </ul>
+            </description>
+        </release>
+        <release version="1.0.0-beta.8" date="2025-06-06" />
+        <release version="1.0.0-beta.7" date="2025-06-05" />
+        <release version="1.0.0-beta.6" date="2025-05-26" />
+        <release version="1.0.0-beta.5" date="2025-05-22" />
+        <release version="1.0.0-beta.4" date="2025-05-21" />
+        <release version="1.0.0-beta.3" date="2025-05-09" />
+        <release version="1.0.0-beta.2" date="2025-05-02" />
+        <release version="1.0.0-beta.1" date="2025-04-30" />
+    </releases>
+</component>

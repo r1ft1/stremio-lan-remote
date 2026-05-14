@@ -1,0 +1,151 @@
+{
+    "app-id": "com.stremio.Stremio.Devel",
+    "runtime": "org.gnome.Platform",
+    "runtime-version": "50",
+    "sdk": "org.gnome.Sdk",
+    "sdk-extensions": [
+        "org.freedesktop.Sdk.Extension.rust-stable"
+    ],
+    "add-extensions": {
+        "org.freedesktop.Platform.ffmpeg-full": {
+            "version": "25.08",
+            "directory": "lib/ffmpeg",
+            "add-ld-path": "."
+        },
+        "org.freedesktop.Platform.VAAPI.Intel": {
+            "version": "25.08",
+            "directory": "lib/intel-vaapi-driver",
+            "add-ld-path": ".",
+            "download-if": "have-intel-gpu",
+            "enable-if": "have-intel-gpu"
+        }
+    },
+    "command": "stremio",
+    "finish-args": [
+        "--socket=wayland",
+        "--socket=fallback-x11",
+        "--socket=pulseaudio",
+        "--share=ipc",
+        "--share=network",
+        "--device=dri",
+        "--persist=.stremio-server",
+        "--filesystem=xdg-download",
+        "--talk-name=org.kde.StatusNotifierWatcher",
+        "--own-name=com.stremio.Stremio.Devel",
+        "--env=SERVER_PATH=/app/bin/server.js",
+        "--env=RUST_LOG=debug"
+    ],
+    "build-options": {
+        "append-path": "/usr/lib/sdk/rust-stable/bin"
+    },
+    "modules": [
+        {
+            "name": "stremio",
+            "buildsystem": "simple",
+            "build-options": {
+                "env": {
+                    "CARGO_HOME": "/run/build/stremio/cargo",
+                    "RUSTFLAGS": "-L /app/lib -L /app/lib64 -C link-arg=-Wl,-rpath-link=/app/lib -C link-arg=-Wl,-rpath-link=/app/lib64"
+                }
+            },
+            "build-commands": [
+                "cargo --offline fetch --manifest-path Cargo.toml --verbose",
+                "cargo --offline build --verbose"
+            ],
+            "post-install": [
+                "install -Dm755 target/debug/stremio-linux-shell /app/bin/stremio",
+                "install -Dm644 data/server.js -t /app/bin/",
+                "install -Dm644 data/icons/com.stremio.Stremio.Devel.svg -t /app/share/icons/hicolor/scalable/apps/",
+                "install -Dm644 data/com.stremio.Stremio.desktop /app/share/applications/com.stremio.Stremio.Devel.desktop",
+                "sed -i -e 's/com.stremio.Stremio/com.stremio.Stremio.Devel/g' /app/share/applications/com.stremio.Stremio.Devel.desktop",
+                "install -Dm644 data/com.stremio.Stremio.metainfo.xml /app/share/metainfo/com.stremio.Stremio.Devel.metainfo.xml",
+                "sed -i -e 's/com.stremio.Stremio/com.stremio.Stremio.Devel/g' /app/share/metainfo/com.stremio.Stremio.Devel.metainfo.xml",
+                "install -Dm644 data/com.stremio.Stremio.service /app/share/dbus-1/services/com.stremio.Stremio.Devel.service",
+                "sed -i -e 's/com.stremio.Stremio/com.stremio.Stremio.Devel/g' /app/share/dbus-1/services/com.stremio.Stremio.Devel.service",
+                "install -Dm644 po/es/LC_MESSAGES/stremio.mo -t /app/share/locale/es/LC_MESSAGES/",
+                "install -Dm644 po/fr/LC_MESSAGES/stremio.mo -t /app/share/locale/fr/LC_MESSAGES/",
+                "mkdir -p /app/lib/ffmpeg",
+                "mkdir -p /app/lib/intel-vaapi-driver"
+            ],
+            "sources": [
+                {
+                    "type": "dir",
+                    "path": "../"
+                },
+                "cargo-sources.json"
+            ],
+            "modules": [
+                {
+                    "name": "libmpv",
+                    "buildsystem": "meson",
+                    "config-opts": [
+                        "-Dbuild-date=false",
+                        "-Dcplayer=false",
+                        "-Dlibmpv=true",
+                        "-Dmanpage-build=disabled"
+                    ],
+                    "cleanup": [
+                        "/include",
+                        "/lib/pkgconfig"
+                    ],
+                    "sources": [
+                        {
+                            "type": "archive",
+                            "url": "https://github.com/mpv-player/mpv/archive/v0.41.0.tar.gz",
+                            "sha256": "ee21092a5ee427353392360929dc64645c54479aefdb5babc5cfbb5fad626209"
+                        }
+                    ],
+                    "modules": [
+                        {
+                            "name": "libplacebo",
+                            "buildsystem": "meson",
+                            "config-opts": [
+                                "-Ddemos=false"
+                            ],
+                            "cleanup": [
+                                "/include",
+                                "/lib/pkgconfig"
+                            ],
+                            "sources": [
+                                {
+                                    "type": "git",
+                                    "url": "https://github.com/haasn/libplacebo.git",
+                                    "tag": "v7.360.1"
+                                }
+                            ]
+                        },
+                        {
+                            "name": "libass",
+                            "buildsystem": "meson",
+                            "cleanup": [
+                                "/include",
+                                "/lib/pkgconfig"
+                            ],
+                            "sources": [
+                                {
+                                    "type": "archive",
+                                    "url": "https://github.com/libass/libass/archive/0.17.4.tar.gz",
+                                    "sha256": "c287d180d93dc9c9021872574b618ac49027e84cc90e1289318b1ee68bb42251"
+                                }
+                            ]
+                        }
+                    ]
+                }
+            ]
+        },
+        {
+            "name": "nodejs",
+            "buildsystem": "simple",
+            "build-commands": [
+                "install -D bin/node -t /app/bin/"
+            ],
+            "sources": [
+                {
+                    "type": "archive",
+                    "url": "https://nodejs.org/dist/v22.15.0/node-v22.15.0-linux-x64.tar.xz",
+                    "sha256": "dafe2e8f82cb97de1bd10db9e2ec4c07bbf53389b0799b1e095a918951e78fd4"
+                }
+            ]
+        }
+    ]
+}
