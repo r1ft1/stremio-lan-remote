@@ -3,9 +3,11 @@
   "version": "0.1.0",
   "type": "module",
   "scripts": {
-    "test": "vitest run"
+    "test": "vitest run",
+    "build": "node build.js"
   },
   "devDependencies": {
+    "esbuild": "^0.28.0",
     "vitest": "^4.1.6"
   }
 }
