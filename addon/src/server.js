@@ -5,7 +5,7 @@ import { dirname, resolve } from 'node:path';
 import sdk from 'stremio-addon-sdk';
 const { getRouter } = sdk;
 import { addonInterface } from './index.js';
-import { encodePlayerLoad } from './dispatchEncoder.js';
+import { encodePlayerLoad, encodePlayerPausedChanged } from './dispatchEncoder.js';
 import { resolveBestStream } from './resolver.js';
 import { config } from './config.js';
 
@@ -31,16 +31,27 @@ export function createServer({
       const stream = streamToken
         ? JSON.parse(Buffer.from(streamToken, 'base64url').toString('utf8'))
         : await resolver({ type, id: videoId });
-      const action = encodePlayerLoad({ stream, metaId: id, videoId, type });
+      const loadAction = encodePlayerLoad({ stream, metaId: id, videoId, type });
 
-      const dispatchRes = await fetchFn(`http://${shellHost}/dispatch`, {
+      const loadRes = await fetchFn(`http://${shellHost}/dispatch`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(action),
+        body: JSON.stringify(loadAction),
       });
-      if (!dispatchRes.ok) {
+      if (!loadRes.ok) {
         return res.status(502).send('shell dispatch failed');
       }
+
+      setTimeout(async () => {
+        try {
+          const playAction = encodePlayerPausedChanged(false, loadAction.locationHash);
+          await fetchFn(`http://${shellHost}/dispatch`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(playAction),
+          });
+        } catch (e) {}
+      }, 1500);
 
       res.set('Content-Type', 'video/mp4');
       res.send(PLACEHOLDER);
