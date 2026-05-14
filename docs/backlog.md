@@ -55,3 +55,36 @@ Future work intentionally deferred from v1. Items here are not bugs in the v1 de
 - Show current Deck playback state on the phone (requires reverse channel — addon polls shell's `getState`)
 - Multi-Deck support from one phone (pick which Deck to cast to)
 - Resume playback / "next episode" handoff (companion listens for end-of-file from the player, dispatches the next item)
+- Replace the placeholder MP4 response with a "Casting to Deck" branded overlay (visually communicative, not silent black frame)
+- After Player Load dispatch, also send Player::PausedChanged(paused: false) to skip the "click to play" Stremio logo state
+
+## Install-friction architecture (v1.1 deployment paths)
+
+v1 requires Tailscale on every device. Tested findings:
+
+- **Stremio mobile v2 (Play Store) stripped the addon-install UI.** Custom addons can only be installed via account sync from web.stremio.com.
+- **web.stremio.com is HTTPS, so it mixed-content-blocks plain HTTP addon URLs.** A real HTTPS endpoint is required for the manifest fetch.
+- **`stremio://...` URL scheme is registered on mobile v2 but does not trigger install** (only opens the app, presumably because the UI code path was removed in the rewrite). QR pairing via this scheme is *not* viable for v2 mobile users.
+- **After install, Stremio mobile fetches addon endpoints natively (not via browser JS), so plain HTTP works fine post-install.** The HTTPS requirement is purely for the install fetch.
+
+Viable v1.1 deployment options to drop the Tailscale requirement:
+
+### Option A: Cloudflare Worker hosting the manifest
+- Free tier (100k req/day) hosts a JS function generating per-user manifests
+- URL pattern: `https://lanremote.example.workers.dev/<base64-deck-host>/manifest.json`
+- Manifest's stream entries point at the user's local Deck: `http://<deck-host>:7000/cast?...`
+- User flow: visit static configurator page → enter Deck hostname → get personalized install URL → install via web.stremio.com → syncs to mobile
+- Trade-off: depends on Cloudflare uptime; per-user Deck hostname leaked to our worker logs (but stripped of personal data)
+
+### Option B: Stremio v1 APK only
+- Document that mobile users must sideload Stremio v1 APK from stremio.com (not Play Store)
+- v1 has the full addon UI, accepts plain HTTP install URLs
+- QR pairing via `stremio://` scheme works on v1
+- Trade-off: sideloading friction; v1 lacks newer Stremio features
+
+### Option C: GitHub Pages user-fork model
+- User forks the project, edits a config file with their Deck hostname, GH Actions builds a personalized manifest, deploys to their `username.github.io/lan-remote/`
+- No central infrastructure
+- Trade-off: every user needs a GitHub account and to perform a fork + edit + wait-for-CI before using the addon
+
+Recommended path: **Option A (Cloudflare Worker)** for lowest user friction. Implementation is ~30 LOC of TS. Option B as documented fallback for users who refuse to depend on Cloudflare.
