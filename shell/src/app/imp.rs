@@ -78,6 +78,37 @@ impl ApplicationImpl for Application {
         webview.connect_lan_remote_log();
         webview.dev_mode(dev_mode);
 
+        webview.connect_web_process_terminated(clone!(
+            #[weak]
+            webview,
+            move || {
+                tracing::warn!(target: "lan_remote", "reloading webview after web-process-terminated");
+                webview.reload();
+            }
+        ));
+
+        let last_heartbeat: Rc<Cell<std::time::Instant>> =
+            Rc::new(Cell::new(std::time::Instant::now()));
+        let last_heartbeat_for_handler = last_heartbeat.clone();
+        webview.connect_heartbeat(move || {
+            last_heartbeat_for_handler.set(std::time::Instant::now());
+        });
+
+        let last_heartbeat_for_check = last_heartbeat.clone();
+        let webview_for_hb = webview.clone();
+        glib::timeout_add_seconds_local(10, move || {
+            let elapsed = last_heartbeat_for_check.get().elapsed();
+            if elapsed > std::time::Duration::from_secs(30) {
+                tracing::warn!(
+                    target: "lan_remote",
+                    "no webview heartbeat for {:?}, reloading", elapsed
+                );
+                last_heartbeat_for_check.set(std::time::Instant::now());
+                webview_for_hb.reload();
+            }
+            glib::ControlFlow::Continue
+        });
+
         let lan_direct_mode: Rc<Cell<bool>> = Rc::new(Cell::new(false));
         let lan_state: lan_remote::SharedState = std::sync::Arc::new(std::sync::RwLock::new(lan_remote::StateSnapshot::default()));
         let download_dir_for_state = dirs::home_dir()

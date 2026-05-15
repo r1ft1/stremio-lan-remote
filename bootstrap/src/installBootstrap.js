@@ -14,6 +14,17 @@ export function installBootstrap(window) {
 
   emit({ event: 'INSTALL', hasWorker: typeof window.Worker === 'function' });
 
+  function heartbeat() {
+    try {
+      const h = window.webkit
+        && window.webkit.messageHandlers
+        && window.webkit.messageHandlers.lan_remote_heartbeat;
+      if (h) h.postMessage('1');
+    } catch (e) {}
+  }
+  heartbeat();
+  setInterval(heartbeat, 5000);
+
   if (typeof window.Worker === 'function') {
     const OrigWorker = window.Worker;
     function PatchedWorker(scriptURL, options) {
