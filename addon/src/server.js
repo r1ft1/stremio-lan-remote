@@ -319,10 +319,18 @@ export function createServer({
       const stream = JSON.parse(Buffer.from(streamToken, 'base64url').toString('utf8'));
       if (!stream.infoHash) return res.status(400).send('stream has no infoHash');
       const sourceUrl = `http://127.0.0.1:11470/${stream.infoHash}/${stream.fileIdx ?? 0}`;
-      const base = (stream.title?.split('\n')[0] || stream.name?.replace(/\n/g, ' ') || `${id}-${stream.infoHash}`)
-        .replace(/[^\w\-. ]+/g, '_').slice(0, 180);
+      let base = (stream.title?.split('\n')[0] || stream.name?.replace(/\n/g, ' ') || `${id}-${stream.infoHash}`)
+        .replace(/[^\w\-. ]+/g, '_').slice(0, 160);
+      if (season != null && episode != null) {
+        const tag = `S${String(season).padStart(2, '0')}E${String(episode).padStart(2, '0')}`;
+        if (!new RegExp(tag, 'i').test(base) && !new RegExp(`S0?${season}E0?${episode}`, 'i').test(base)) {
+          base = `${base}.${tag}`;
+        }
+      }
       const filename = `${base}.mkv`;
-      const meta_id = String(id || '').split(':')[0];
+      const meta_id = season != null && episode != null
+        ? `${String(id || '').split(':')[0]}:${season}:${episode}`
+        : String(id || '').split(':')[0];
       await fetchFn(`http://${shellHost}/download`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -442,10 +450,18 @@ export function createServer({
       const stream = JSON.parse(Buffer.from(streamToken, 'base64url').toString('utf8'));
       if (!stream.infoHash) return res.status(400).send('stream has no infoHash');
       const sourceUrl = `http://127.0.0.1:11470/${stream.infoHash}/${stream.fileIdx ?? 0}`;
-      const base = (stream.title?.split('\n')[0] || stream.name?.replace(/\n/g, ' ') || `${id}-${stream.infoHash}`)
-        .replace(/[^\w\-. ]+/g, '_').slice(0, 180);
+      let base = (stream.title?.split('\n')[0] || stream.name?.replace(/\n/g, ' ') || `${id}-${stream.infoHash}`)
+        .replace(/[^\w\-. ]+/g, '_').slice(0, 160);
+      if (season != null && episode != null) {
+        const tag = `S${String(season).padStart(2, '0')}E${String(episode).padStart(2, '0')}`;
+        if (!new RegExp(tag, 'i').test(base) && !new RegExp(`S0?${season}E0?${episode}`, 'i').test(base)) {
+          base = `${base}.${tag}`;
+        }
+      }
       const filename = `${base}.mkv`;
-      const meta_id = String(id || '').split(':')[0];
+      const meta_id = season != null && episode != null
+        ? `${String(id || '').split(':')[0]}:${season}:${episode}`
+        : String(id || '').split(':')[0];
       await fetchFn(`http://${shellHost}/download`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },

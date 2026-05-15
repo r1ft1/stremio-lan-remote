@@ -243,6 +243,28 @@ function parseFilename(filename) {
   return { title, year };
 }
 
+async function cinemetaResolveByMetaId(metaId) {
+  if (!metaId) return null;
+  if (!metaId.includes(':')) {
+    return cinemetaLookup(metaId, 'movie');
+  }
+  const [id, season, episode] = metaId.split(':');
+  const series = await cinemetaLookup(id, 'series');
+  if (!series) return null;
+  const ep = (series.videos || []).find(
+    (v) => String(v.season) === String(season) && String(v.number ?? v.episode) === String(episode)
+  );
+  const epTitle = ep?.title || ep?.name || '';
+  const tag = `S${String(season).padStart(2, '0')}E${String(episode).padStart(2, '0')}`;
+  return {
+    ...series,
+    name: epTitle ? `${series.name} — ${tag} · ${epTitle}` : `${series.name} — ${tag}`,
+    description: ep?.overview || ep?.description || series.description,
+    poster: ep?.thumbnail || series.poster,
+    releaseInfo: ep?.released ? String(new Date(ep.released).getUTCFullYear()) : series.releaseInfo,
+  };
+}
+
 async function cinemetaSearchByFilename(filename) {
   const key = `filename:${filename}`;
   const cached = CINEMETA_CACHE.get(key);
@@ -289,7 +311,7 @@ builder.defineCatalogHandler(async ({ type, id }) => {
       } else if (d.status !== 'done') {
         suffix = ` [${d.status}]`;
       }
-      let cm = d.meta_id ? await cinemetaLookup(d.meta_id) : null;
+      let cm = d.meta_id ? await cinemetaResolveByMetaId(d.meta_id) : null;
       if (!cm) cm = await cinemetaSearchByFilename(d.filename);
       const baseName = cm?.name || prettyTitleFromFilename(d.filename);
       const displayName = d.status === 'done' ? baseName : baseName + suffix;
@@ -322,7 +344,7 @@ builder.defineMetaHandler(async ({ type, id }) => {
   const filename = decodeURIComponent(id.slice('lan-dl:'.length));
   const list = await fetchDownloads();
   const entry = list.find((d) => d.filename === filename);
-  let cm = entry?.meta_id ? await cinemetaLookup(entry.meta_id) : null;
+  let cm = entry?.meta_id ? await cinemetaResolveByMetaId(entry.meta_id) : null;
   if (!cm && entry) cm = await cinemetaSearchByFilename(filename);
   const meta = {
     id,
