@@ -35,7 +35,7 @@ describe('stream handler', () => {
     expect(cast).toHaveLength(2);
     expect(download).toHaveLength(2);
     expect(cast[0].name).toMatch(/Cast: Torrentio . 1080p/);
-    expect(download[0].url).toContain('/download_trigger');
+    expect(download[0].externalUrl).toContain('/download_trigger_html');
   });
 
   it('encodes the full stream object in each URL', async () => {

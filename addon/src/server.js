@@ -300,6 +300,56 @@ export function createServer({
     res.send(PLACEHOLDER);
   });
 
+  app.get('/noop', (_req, res) => {
+    res.set('Content-Type', 'video/mp4');
+    res.send(CONTROL_TINY);
+  });
+
+  app.get('/icons/download.svg', (_req, res) => {
+    res.set('Content-Type', 'image/svg+xml');
+    res.set('Cache-Control', 'public, max-age=3600');
+    res.send(
+      `<?xml version="1.0" encoding="UTF-8"?>` +
+      `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 300" preserveAspectRatio="xMidYMid meet">` +
+        `<rect width="200" height="300" fill="#1c1c22"/>` +
+        `<g stroke="#3e3aed" stroke-width="14" fill="none" stroke-linecap="round" stroke-linejoin="round">` +
+          `<path d="M100 90 L100 200"/>` +
+          `<path d="M55 158 L100 203 L145 158"/>` +
+          `<path d="M55 240 L145 240"/>` +
+        `</g>` +
+      `</svg>`
+    );
+  });
+
+  app.get('/download_trigger_html', async (req, res) => {
+    try {
+      const { id, season, episode, stream: streamToken } = req.query;
+      if (!streamToken) return res.status(400).send('missing stream');
+      const stream = JSON.parse(Buffer.from(streamToken, 'base64url').toString('utf8'));
+      if (!stream.infoHash) return res.status(400).send('stream has no infoHash');
+      const sourceUrl = `http://127.0.0.1:11470/${stream.infoHash}/${stream.fileIdx ?? 0}`;
+      const base = (stream.title?.split('\n')[0] || stream.name?.replace(/\n/g, ' ') || `${id}-${stream.infoHash}`)
+        .replace(/[^\w\-. ]+/g, '_').slice(0, 180);
+      const filename = `${base}.mkv`;
+      const meta_id = String(id || '').split(':')[0];
+      await fetchFn(`http://${shellHost}/download`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url: sourceUrl, filename, meta_id }),
+      }).catch(() => {});
+      res.set('Content-Type', 'text/html; charset=utf-8');
+      res.send(
+        '<!doctype html><meta charset="utf-8">' +
+        '<title>Download started</title>' +
+        '<style>body{background:#0f0f12;color:#eaeaf2;font-family:-apple-system,sans-serif;display:flex;align-items:center;justify-content:center;height:100vh;margin:0;padding:0 20px;text-align:center}</style>' +
+        '<div><p>📥 Download started on the Deck — returning to Stremio…</p></div>' +
+        '<script>setTimeout(function(){location.href="stremio:///"},250)</script>'
+      );
+    } catch (e) {
+      res.status(502).send(e.message);
+    }
+  });
+
   app.post('/seek_abs', async (req, res) => {
     try {
       const r = await fetchFn(`http://${shellHost}/seek_abs`, {
