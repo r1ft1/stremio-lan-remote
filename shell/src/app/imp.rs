@@ -80,15 +80,33 @@ impl ApplicationImpl for Application {
 
         let lan_direct_mode: Rc<Cell<bool>> = Rc::new(Cell::new(false));
         let lan_state: lan_remote::SharedState = std::sync::Arc::new(std::sync::RwLock::new(lan_remote::StateSnapshot::default()));
-        let lan_downloads: lan_remote::SharedDownloads = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let download_dir_for_state = dirs::home_dir()
+            .unwrap_or_else(|| std::path::PathBuf::from("/tmp"))
+            .join("stremio-downloads");
+        let _ = std::fs::create_dir_all(&download_dir_for_state);
+        let persisted = lan_remote::load_persisted(&download_dir_for_state);
+        let to_resume: Vec<_> = persisted
+            .iter()
+            .filter(|e| e.status == "interrupted" && !e.source_url.is_empty())
+            .cloned()
+            .collect();
+        let lan_downloads: lan_remote::SharedDownloads = std::sync::Arc::new(std::sync::Mutex::new(persisted));
+        for entry in to_resume {
+            tracing::info!(target: "lan_remote", "auto-resuming interrupted download: {}", entry.filename);
+            lan_remote::spawn_download_task(
+                entry.source_url,
+                entry.filename,
+                entry.meta_id,
+                lan_downloads.clone(),
+                download_dir_for_state.clone(),
+            );
+        }
 
         for prop in ["time-pos", "duration", "pause", "track-list", "aid", "sid", "paused-for-cache", "cache-buffering-state", "volume"] {
             video.observe_mpv_property(prop.to_string());
         }
 
-        let download_dir = dirs::home_dir()
-            .unwrap_or_else(|| std::path::PathBuf::from("/tmp"))
-            .join("stremio-downloads");
+        let download_dir = download_dir_for_state;
 
         let window = Window::new(&app);
         window.set_property("decorations", self.decorations.get());

@@ -39,7 +39,7 @@ pub struct StateSnapshot {
     pub fullscreen: bool,
 }
 
-#[derive(Default, Clone, Serialize)]
+#[derive(Default, Clone, Serialize, Deserialize)]
 pub struct DownloadEntry {
     pub filename: String,
     pub path: String,
@@ -47,9 +47,35 @@ pub struct DownloadEntry {
     pub bytes: u64,
     pub total: u64,
     pub status: String,
+    #[serde(default)]
+    pub meta_id: String,
 }
 
 pub type SharedDownloads = Arc<Mutex<Vec<DownloadEntry>>>;
+
+const PERSIST_FILE: &str = ".downloads.json";
+
+pub fn load_persisted(dir: &std::path::Path) -> Vec<DownloadEntry> {
+    let p = dir.join(PERSIST_FILE);
+    let raw = match std::fs::read_to_string(&p) {
+        Ok(s) => s,
+        Err(_) => return Vec::new(),
+    };
+    let mut list: Vec<DownloadEntry> = serde_json::from_str(&raw).unwrap_or_default();
+    for e in list.iter_mut() {
+        if e.status == "downloading" {
+            e.status = "interrupted".into();
+        }
+    }
+    list
+}
+
+fn persist(dir: &std::path::Path, list: &[DownloadEntry]) {
+    let p = dir.join(PERSIST_FILE);
+    if let Ok(data) = serde_json::to_string(list) {
+        let _ = std::fs::write(p, data);
+    }
+}
 
 pub type SharedState = Arc<RwLock<StateSnapshot>>;
 
@@ -86,6 +112,8 @@ struct TrackBody {
 struct DownloadBody {
     url: String,
     filename: String,
+    #[serde(default)]
+    meta_id: String,
 }
 
 #[derive(Deserialize)]
@@ -238,12 +266,79 @@ async fn get_downloads(State(state): State<AppState>) -> Json<Vec<DownloadEntry>
                 path: path.to_string_lossy().to_string(),
                 source_url: String::new(),
                 bytes: size,
-                total: size,
-                status: "done".into(),
+                total: 0,
+                status: "unknown".into(),
+                meta_id: String::new(),
             });
         }
     }
     Json(list)
+}
+
+pub fn spawn_download_task(
+    url: String,
+    filename: String,
+    meta_id: String,
+    downloads: SharedDownloads,
+    dir: std::path::PathBuf,
+) -> bool {
+    let dest = dir.join(&filename);
+    let _ = std::fs::create_dir_all(&dir);
+
+    let resume_from: u64 = {
+        let mut d = match downloads.lock() {
+            Ok(g) => g,
+            Err(_) => return false,
+        };
+        if d.iter().any(|e| e.filename == filename && e.status == "downloading") {
+            return false;
+        }
+        let existing_meta_id = d
+            .iter()
+            .find(|e| e.filename == filename)
+            .map(|e| e.meta_id.clone())
+            .unwrap_or_default();
+        let final_meta_id = if !meta_id.is_empty() { meta_id.clone() } else { existing_meta_id };
+        let on_disk = std::fs::metadata(&dest).map(|m| m.len()).unwrap_or(0);
+        d.retain(|e| e.filename != filename);
+        d.push(DownloadEntry {
+            filename: filename.clone(),
+            path: dest.to_string_lossy().to_string(),
+            source_url: url.clone(),
+            bytes: on_disk,
+            total: 0,
+            status: "downloading".into(),
+            meta_id: final_meta_id,
+        });
+        persist(&dir, &d);
+        on_disk
+    };
+
+    let downloads_for_task = downloads.clone();
+    let dir_for_task = dir.clone();
+    let filename_for_task = filename.clone();
+    let url_for_task = url.clone();
+    tokio::spawn(async move {
+        info!(target: "lan_remote", "download start url={url_for_task} dest={dest:?} resume_from={resume_from}");
+        let result = download_to_file(&url_for_task, &dest, &filename_for_task, downloads_for_task.clone(), resume_from).await;
+        let mut d = downloads_for_task.lock().unwrap();
+        if let Some(entry) = d.iter_mut().find(|e| e.filename == filename_for_task) {
+            entry.status = match &result {
+                Ok(_) => "done".into(),
+                Err(e) => {
+                    let msg = e.to_string();
+                    if msg == "cancelled" {
+                        "cancelled".into()
+                    } else {
+                        error!(target: "lan_remote", "download {filename_for_task} failed: {msg}");
+                        format!("error: {msg}")
+                    }
+                }
+            };
+        }
+        persist(&dir_for_task, &d);
+    });
+    true
 }
 
 async fn start_download(State(state): State<AppState>, Json(body): Json<DownloadBody>) -> StatusCode {
@@ -251,47 +346,11 @@ async fn start_download(State(state): State<AppState>, Json(body): Json<Download
     if filename.is_empty() {
         return StatusCode::BAD_REQUEST;
     }
-    let url = body.url;
-    let dest = state.download_dir.join(&filename);
-    let downloads = state.downloads.clone();
-
-    if let Err(e) = std::fs::create_dir_all(&state.download_dir) {
-        error!("create download dir failed: {e}");
-        return StatusCode::INTERNAL_SERVER_ERROR;
+    if spawn_download_task(body.url, filename, body.meta_id, state.downloads, state.download_dir) {
+        StatusCode::ACCEPTED
+    } else {
+        StatusCode::CONFLICT
     }
-
-    {
-        let mut d = downloads.lock().unwrap();
-        if d.iter().any(|e| e.filename == filename && e.status == "downloading") {
-            return StatusCode::CONFLICT;
-        }
-        d.retain(|e| e.filename != filename);
-        d.push(DownloadEntry {
-            filename: filename.clone(),
-            path: dest.to_string_lossy().to_string(),
-            source_url: url.clone(),
-            bytes: 0,
-            total: 0,
-            status: "downloading".into(),
-        });
-    }
-
-    tokio::spawn(async move {
-        info!(target: "lan_remote", "download start url={url} dest={dest:?}");
-        let result = download_to_file(&url, &dest, &filename, downloads.clone()).await;
-        let mut d = downloads.lock().unwrap();
-        if let Some(entry) = d.iter_mut().find(|e| e.filename == filename) {
-            entry.status = match result {
-                Ok(_) => "done".into(),
-                Err(e) => {
-                    error!(target: "lan_remote", "download {filename} failed: {e}");
-                    format!("error: {e}")
-                }
-            };
-        }
-    });
-
-    StatusCode::ACCEPTED
 }
 
 async fn download_to_file(
@@ -299,22 +358,38 @@ async fn download_to_file(
     dest: &std::path::Path,
     filename: &str,
     downloads: SharedDownloads,
+    resume_from: u64,
 ) -> anyhow::Result<()> {
-    let resp = reqwest::get(url).await?;
-    if !resp.status().is_success() {
-        anyhow::bail!("HTTP {}", resp.status());
+    let client = reqwest::Client::new();
+    let mut req = client.get(url);
+    if resume_from > 0 {
+        req = req.header("Range", format!("bytes={}-", resume_from));
     }
-    let total = resp.content_length().unwrap_or(0);
+    let resp = req.send().await?;
+    let status = resp.status();
+    if !status.is_success() {
+        anyhow::bail!("HTTP {}", status);
+    }
+    let resumed = status.as_u16() == 206;
+    let body_len = resp.content_length().unwrap_or(0);
+    let total = if resumed { resume_from + body_len } else { body_len };
     {
         let mut d = downloads.lock().unwrap();
         if let Some(e) = d.iter_mut().find(|e| e.filename == filename) {
             e.total = total;
+            if !resumed {
+                e.bytes = 0;
+            }
         }
     }
-    let mut stream = resp.bytes_stream();
     use futures_util::StreamExt;
-    let mut file = tokio::fs::File::create(dest).await?;
-    let mut bytes: u64 = 0;
+    let mut stream = resp.bytes_stream();
+    let mut file = if resumed {
+        tokio::fs::OpenOptions::new().append(true).open(dest).await?
+    } else {
+        tokio::fs::File::create(dest).await?
+    };
+    let mut bytes: u64 = if resumed { resume_from } else { 0 };
     while let Some(chunk) = stream.next().await {
         let chunk = chunk?;
         file.write_all(&chunk).await?;
@@ -354,11 +429,13 @@ async fn cancel_download(State(state): State<AppState>, Json(body): Json<Downloa
     }
     let downloads = state.downloads.clone();
     let filename_clone = filename.clone();
+    let dir = state.download_dir.clone();
     tokio::spawn(async move {
         tokio::time::sleep(std::time::Duration::from_millis(800)).await;
         let _ = tokio::fs::remove_file(&path).await;
         let mut d = downloads.lock().unwrap();
         d.retain(|e| e.filename != filename_clone);
+        persist(&dir, &d);
         info!(target: "lan_remote", "cancelled and removed {filename_clone}");
     });
     StatusCode::ACCEPTED
@@ -367,17 +444,21 @@ async fn cancel_download(State(state): State<AppState>, Json(body): Json<Downloa
 async fn delete_download(State(state): State<AppState>, Json(body): Json<DownloadByName>) -> StatusCode {
     let filename = sanitize_filename(&body.filename);
     let path = state.download_dir.join(&filename);
-    let was_done = {
+    let allowed = {
         let d = state.downloads.lock().unwrap();
-        d.iter().any(|e| e.filename == filename && e.status == "done")
+        d.iter().any(|e| {
+            e.filename == filename
+                && matches!(e.status.as_str(), "done" | "unknown" | "interrupted")
+        })
     };
-    if !was_done {
+    if !allowed {
         return StatusCode::NOT_FOUND;
     }
     match tokio::fs::remove_file(&path).await {
         Ok(_) => {
             let mut d = state.downloads.lock().unwrap();
             d.retain(|e| e.filename != filename);
+            persist(&state.download_dir, &d);
             info!(target: "lan_remote", "deleted {filename}");
             StatusCode::OK
         }
