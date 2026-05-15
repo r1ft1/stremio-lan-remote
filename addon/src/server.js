@@ -338,6 +338,25 @@ export function createServer({
     } catch (e) { res.status(502).end(); }
   });
 
+  app.get('/cast_local', async (req, res) => {
+    try {
+      const streamToken = req.query.stream;
+      if (!streamToken) return res.status(400).send('missing stream');
+      const stream = JSON.parse(Buffer.from(streamToken, 'base64url').toString('utf8'));
+      if (!stream.url) return res.status(400).send('stream has no url');
+      await fetchFn(`http://${shellHost}/play_url`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url: stream.url }),
+      });
+      const title = String(req.query.name || stream.name || 'Local file');
+      res.set('Content-Type', 'text/html; charset=utf-8');
+      res.send(controllerHtml(title, 'stremio:///'));
+    } catch (e) {
+      res.status(502).send(e.message);
+    }
+  });
+
   app.get('/download_trigger', async (req, res) => {
     try {
       const { id, season, episode, stream: streamToken } = req.query;
