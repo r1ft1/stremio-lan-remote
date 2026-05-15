@@ -17,6 +17,7 @@ import { config } from './config.js';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PLACEHOLDER = readFileSync(resolve(__dirname, '../assets/casting.mp4'));
 const CONTROL_TINY = readFileSync(resolve(__dirname, '../assets/tiny.mp4'));
+const DOWNLOAD_ICON = readFileSync(resolve(__dirname, '../assets/download.png'));
 
 function controllerHtml(title, metaDeepLink) {
   const escapeHtml = (s) =>
@@ -305,20 +306,10 @@ export function createServer({
     res.send(CONTROL_TINY);
   });
 
-  app.get('/icons/download.svg', (_req, res) => {
-    res.set('Content-Type', 'image/svg+xml');
+  app.get('/icons/download.png', (_req, res) => {
+    res.set('Content-Type', 'image/png');
     res.set('Cache-Control', 'public, max-age=3600');
-    res.send(
-      `<?xml version="1.0" encoding="UTF-8"?>` +
-      `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 300" preserveAspectRatio="xMidYMid meet">` +
-        `<rect width="200" height="300" fill="#1c1c22"/>` +
-        `<g stroke="#3e3aed" stroke-width="14" fill="none" stroke-linecap="round" stroke-linejoin="round">` +
-          `<path d="M100 90 L100 200"/>` +
-          `<path d="M55 158 L100 203 L145 158"/>` +
-          `<path d="M55 240 L145 240"/>` +
-        `</g>` +
-      `</svg>`
-    );
+    res.send(DOWNLOAD_ICON);
   });
 
   app.get('/download_trigger_html', async (req, res) => {
