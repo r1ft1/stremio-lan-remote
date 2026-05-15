@@ -215,7 +215,34 @@ async fn toggle_fullscreen(State(state): State<AppState>) -> StatusCode {
 }
 
 async fn get_downloads(State(state): State<AppState>) -> Json<Vec<DownloadEntry>> {
-    let list = state.downloads.lock().map(|d| d.clone()).unwrap_or_default();
+    let mut list = state.downloads.lock().map(|d| d.clone()).unwrap_or_default();
+    if let Ok(read_dir) = std::fs::read_dir(&state.download_dir) {
+        for entry in read_dir.flatten() {
+            let path = entry.path();
+            if !path.is_file() {
+                continue;
+            }
+            let filename = match path.file_name().and_then(|s| s.to_str()) {
+                Some(n) => n.to_string(),
+                None => continue,
+            };
+            if filename.starts_with('.') {
+                continue;
+            }
+            if list.iter().any(|e| e.filename == filename) {
+                continue;
+            }
+            let size = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
+            list.push(DownloadEntry {
+                filename: filename.clone(),
+                path: path.to_string_lossy().to_string(),
+                source_url: String::new(),
+                bytes: size,
+                total: size,
+                status: "done".into(),
+            });
+        }
+    }
     Json(list)
 }
 
