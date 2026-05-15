@@ -58,7 +58,26 @@ function downloadEntryFor({ stream, id, publicHost }) {
   return {
     name: `⬇ Download: ${streamLabel(stream)}`,
     title: 'Download to the Deck for later',
-    url: `${publicBase(publicHost)}/download_trigger?${queryFor(id, stream)}`,
+    externalUrl: `${publicBase(publicHost)}/download_trigger_html?${queryFor(id, stream)}`,
+  };
+}
+
+function progressEntry({ entry, publicHost }) {
+  const pct = entry.total > 0 ? Math.round((entry.bytes / entry.total) * 100) : 0;
+  const fmt = (n) => {
+    let v = Number(n) || 0;
+    const u = ['B', 'KB', 'MB', 'GB', 'TB'];
+    let i = 0;
+    while (v >= 1024 && i < u.length - 1) { v /= 1024; i++; }
+    return v.toFixed(i ? 1 : 0) + ' ' + u[i];
+  };
+  const label = entry.total > 0
+    ? `${pct}% • ${fmt(entry.bytes)} / ${fmt(entry.total)}`
+    : `${fmt(entry.bytes)} downloaded so far`;
+  return {
+    name: `📥 ${label}`,
+    title: 'Live download progress (refresh to update)',
+    url: `${publicBase(publicHost)}/noop`,
     behaviorHints: { notWebReady: true },
   };
 }
@@ -132,7 +151,10 @@ builder.defineStreamHandler(async ({ type, id }) => {
     }
     if (entry.status === 'downloading') {
       return {
-        streams: [cancelDownloadEntry({ filename, publicHost: config.publicHost })],
+        streams: [
+          progressEntry({ entry, publicHost: config.publicHost }),
+          cancelDownloadEntry({ filename, publicHost: config.publicHost }),
+        ],
       };
     }
     if (entry.status === 'interrupted') {
@@ -195,6 +217,8 @@ builder.defineCatalogHandler(async ({ type, id }) => {
     } else if (d.status !== 'done') {
       suffix = ` [${d.status}]`;
     }
+    const isInFlight = d.status === 'downloading' || d.status === 'interrupted';
+    const poster = isInFlight ? `${publicBase(config.publicHost)}/icons/download.svg` : undefined;
     return {
       id: `lan-dl:${encodeURIComponent(d.filename)}`,
       type: 'movie',
@@ -204,6 +228,7 @@ builder.defineCatalogHandler(async ({ type, id }) => {
           ? `Downloaded to ${d.path}`
           : `${fmtBytes(d.bytes)} / ${fmtBytes(d.total)} — ${d.status}`,
       releaseInfo: '',
+      ...(poster ? { poster, posterShape: 'square' } : {}),
     };
   });
   return { metas, cacheMaxAge: 0, staleRevalidate: 0, staleError: 0 };
