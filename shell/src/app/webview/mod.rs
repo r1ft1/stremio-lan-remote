@@ -83,6 +83,19 @@ impl WebView {
             });
     }
 
+    pub fn connect_lan_remote_log(&self) {
+        let widget = self.imp();
+        if let Some(user_content_manager) = widget.webview.user_content_manager() {
+            user_content_manager.register_script_message_handler("lan_remote_log", None);
+            user_content_manager.connect_script_message_received(
+                Some("lan_remote_log"),
+                |_, value| {
+                    tracing::info!(target: "lan_remote", "DISPATCH {}", value.to_string());
+                },
+            );
+        }
+    }
+
     pub fn exec_js(&self, script: &str) {
         let widget = self.imp();
 
