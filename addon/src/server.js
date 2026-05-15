@@ -247,6 +247,9 @@ function controllerHtml(title, metaDeepLink) {
   }
   setInterval(poll, 1000);
   poll();
+  window.addEventListener('pageshow', poll);
+  window.addEventListener('visibilitychange', () => { if (!document.hidden) poll(); });
+  window.addEventListener('focus', poll);
 </script>
 </body>
 </html>`;
