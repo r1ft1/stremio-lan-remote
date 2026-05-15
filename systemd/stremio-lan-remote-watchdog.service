@@ -1,0 +1,7 @@
+[Unit]
+Description=Stremio LAN Remote shell watchdog
+After=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=%h/dev/stremio-lan-remote/scripts/watchdog.sh
