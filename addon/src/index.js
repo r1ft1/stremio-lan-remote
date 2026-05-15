@@ -4,15 +4,16 @@ import { resolveAllStreams } from './resolver.js';
 
 export const manifest = {
   id: 'dev.stremiolanremote.addon',
-  version: '0.4.0',
+  version: '0.5.0',
   name: 'LAN Remote',
   description: 'Cast playback to a Stremio LAN Remote desktop',
   resources: ['stream', 'catalog', 'meta'],
   types: ['movie', 'series'],
   catalogs: [
-    { type: 'movie', id: 'lan-remote-downloads', name: 'Deck Downloads' },
+    { type: 'movie', id: 'lan-remote-downloads', name: 'Deck Downloads — Movies' },
+    { type: 'series', id: 'lan-remote-downloads-series', name: 'Deck Downloads — Shows' },
   ],
-  idPrefixes: ['tt', 'lan-dl:'],
+  idPrefixes: ['tt', 'lan-dl:', 'lan-dl-series:'],
 };
 
 function encodeStreamToken(stream) {
@@ -175,14 +176,30 @@ builder.defineStreamHandler(async ({ type, id }) => {
       streams: [deleteDownloadEntry({ filename, publicHost: config.publicHost })],
     };
   }
+  const extras = [];
+  try {
+    const downloads = await fetchDownloads();
+    for (const entry of downloads.filter((d) => d.meta_id === id)) {
+      if (entry.status === 'done' || entry.status === 'unknown') {
+        extras.push(localStreamEntry({ entry, publicHost: config.publicHost }));
+        extras.push(deleteDownloadEntry({ filename: entry.filename, publicHost: config.publicHost }));
+      } else if (entry.status === 'downloading') {
+        extras.push(progressEntry({ entry, publicHost: config.publicHost }));
+        extras.push(cancelDownloadEntry({ filename: entry.filename, publicHost: config.publicHost }));
+      } else if (entry.status === 'interrupted') {
+        extras.push(deleteDownloadEntry({ filename: entry.filename, publicHost: config.publicHost }));
+      }
+    }
+  } catch (e) {}
+
   if (!config.streamResolverUrl) {
-    return { streams: [] };
+    return { streams: extras };
   }
   let streams;
   try {
     streams = await resolveAllStreams({ type, id, upstreamUrl: config.streamResolverUrl });
   } catch (e) {
-    return { streams: [] };
+    return { streams: extras };
   }
   const sorted = [...streams].sort((a, b) => seederCount(b) - seederCount(a));
   const entries = [];
@@ -192,7 +209,7 @@ builder.defineStreamHandler(async ({ type, id }) => {
       entries.push(downloadEntryFor({ stream: s, id, publicHost: config.publicHost }));
     }
   }
-  return { streams: entries };
+  return { streams: [...extras, ...entries] };
 });
 
 function fmtBytes(n) {
@@ -297,49 +314,145 @@ async function cinemetaSearchByFilename(filename) {
   }
 }
 
+function isSeriesEntry(d) {
+  return typeof d.meta_id === 'string' && d.meta_id.includes(':');
+}
+
+function seriesBaseId(d) {
+  return d.meta_id.split(':')[0];
+}
+
+function statusSuffix(d) {
+  if (d.status === 'downloading') {
+    const pct = d.total > 0 ? Math.round((d.bytes / d.total) * 100) : 0;
+    return ` [Downloading ${pct}%]`;
+  }
+  if (d.status !== 'done') return ` [${d.status}]`;
+  return '';
+}
+
 builder.defineCatalogHandler(async ({ type, id }) => {
-  if (id !== 'lan-remote-downloads') return { metas: [] };
   const list = await fetchDownloads();
   const order = (s) => (s === 'downloading' ? 0 : s === 'done' ? 1 : 2);
-  const sorted = [...list].sort((a, b) => order(a.status) - order(b.status));
-  const metas = await Promise.all(
-    sorted.map(async (d) => {
-      let suffix = '';
-      if (d.status === 'downloading') {
-        const pct = d.total > 0 ? Math.round((d.bytes / d.total) * 100) : 0;
-        suffix = ` [Downloading ${pct}%]`;
-      } else if (d.status !== 'done') {
-        suffix = ` [${d.status}]`;
-      }
-      let cm = d.meta_id ? await cinemetaResolveByMetaId(d.meta_id) : null;
-      if (!cm) cm = await cinemetaSearchByFilename(d.filename);
-      const baseName = cm?.name || prettyTitleFromFilename(d.filename);
-      const displayName = d.status === 'done' ? baseName : baseName + suffix;
-      const description =
-        d.status === 'done'
-          ? cm?.description || `Downloaded to ${d.path}`
-          : `${fmtBytes(d.bytes)} / ${fmtBytes(d.total)} — ${d.status}`;
-      const meta = {
-        id: `lan-dl:${encodeURIComponent(d.filename)}`,
-        type: 'movie',
-        name: displayName,
-        description,
-        releaseInfo: cm?.releaseInfo || '',
-      };
-      if (cm?.poster) {
-        meta.poster = cm.poster;
-        meta.posterShape = cm.posterShape || 'poster';
-      }
-      if (cm?.background) meta.background = cm.background;
-      if (cm?.logo) meta.logo = cm.logo;
-      if (cm?.genres) meta.genres = cm.genres;
-      return meta;
-    })
-  );
-  return { metas, cacheMaxAge: 0, staleRevalidate: 0, staleError: 0 };
+
+  if (id === 'lan-remote-downloads') {
+    const movies = list.filter((d) => !isSeriesEntry(d));
+    const sorted = [...movies].sort((a, b) => order(a.status) - order(b.status));
+    const metas = await Promise.all(
+      sorted.map(async (d) => {
+        const suffix = statusSuffix(d);
+        let cm = d.meta_id ? await cinemetaResolveByMetaId(d.meta_id) : null;
+        if (!cm) cm = await cinemetaSearchByFilename(d.filename);
+        const baseName = cm?.name || prettyTitleFromFilename(d.filename);
+        const displayName = d.status === 'done' ? baseName : baseName + suffix;
+        const description =
+          d.status === 'done'
+            ? cm?.description || `Downloaded to ${d.path}`
+            : `${fmtBytes(d.bytes)} / ${fmtBytes(d.total)} — ${d.status}`;
+        const meta = {
+          id: `lan-dl:${encodeURIComponent(d.filename)}`,
+          type: 'movie',
+          name: displayName,
+          description,
+          releaseInfo: cm?.releaseInfo || '',
+        };
+        if (cm?.poster) {
+          meta.poster = cm.poster;
+          meta.posterShape = cm.posterShape || 'poster';
+        }
+        if (cm?.background) meta.background = cm.background;
+        if (cm?.logo) meta.logo = cm.logo;
+        if (cm?.genres) meta.genres = cm.genres;
+        return meta;
+      })
+    );
+    return { metas, cacheMaxAge: 0, staleRevalidate: 0, staleError: 0 };
+  }
+
+  if (id === 'lan-remote-downloads-series') {
+    const episodes = list.filter((d) => isSeriesEntry(d));
+    const bySeries = new Map();
+    for (const ep of episodes) {
+      const seriesId = seriesBaseId(ep);
+      if (!bySeries.has(seriesId)) bySeries.set(seriesId, []);
+      bySeries.get(seriesId).push(ep);
+    }
+    const metas = await Promise.all(
+      [...bySeries.entries()].map(async ([seriesId, eps]) => {
+        const series = await cinemetaLookup(seriesId, 'series');
+        const downloadingCount = eps.filter((e) => e.status === 'downloading').length;
+        const doneCount = eps.filter((e) => e.status === 'done').length;
+        const baseName = series?.name || seriesId;
+        const summary =
+          downloadingCount > 0
+            ? `${doneCount} done · ${downloadingCount} downloading`
+            : `${doneCount} episode${doneCount === 1 ? '' : 's'} downloaded`;
+        const meta = {
+          id: `lan-dl-series:${seriesId}`,
+          type: 'series',
+          name: baseName,
+          description: summary,
+          releaseInfo: series?.releaseInfo || '',
+        };
+        if (series?.poster) {
+          meta.poster = series.poster;
+          meta.posterShape = series.posterShape || 'poster';
+        }
+        if (series?.background) meta.background = series.background;
+        if (series?.logo) meta.logo = series.logo;
+        if (series?.genres) meta.genres = series.genres;
+        return meta;
+      })
+    );
+    return { metas, cacheMaxAge: 0, staleRevalidate: 0, staleError: 0 };
+  }
+
+  return { metas: [] };
 });
 
 builder.defineMetaHandler(async ({ type, id }) => {
+  if (id.startsWith('lan-dl-series:')) {
+    const seriesId = id.slice('lan-dl-series:'.length);
+    const series = await cinemetaLookup(seriesId, 'series');
+    if (!series) return { meta: null };
+    const list = await fetchDownloads();
+    const downloaded = list.filter(
+      (d) => typeof d.meta_id === 'string' && d.meta_id.startsWith(`${seriesId}:`)
+    );
+    const downloadedKeys = new Set(downloaded.map((d) => d.meta_id));
+    const videos = (series.videos || [])
+      .filter((v) => downloadedKeys.has(v.id))
+      .map((v) => {
+        const dl = downloaded.find((d) => d.meta_id === v.id);
+        const suffix = dl ? statusSuffix(dl) : '';
+        return {
+          id: v.id,
+          title: (v.title || `S${v.season}E${v.number}`) + suffix,
+          season: v.season,
+          episode: v.number ?? v.episode,
+          released: v.released,
+          overview: v.overview,
+          thumbnail: v.thumbnail,
+        };
+      });
+    return {
+      meta: {
+        id,
+        type: 'series',
+        name: series.name,
+        description: series.description,
+        poster: series.poster,
+        background: series.background,
+        logo: series.logo,
+        genres: series.genres,
+        releaseInfo: series.releaseInfo,
+        cast: series.cast,
+        director: series.director,
+        runtime: series.runtime,
+        videos,
+      },
+    };
+  }
   if (!id.startsWith('lan-dl:')) return { meta: null };
   const filename = decodeURIComponent(id.slice('lan-dl:'.length));
   const list = await fetchDownloads();
