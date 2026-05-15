@@ -114,18 +114,39 @@ builder.defineStreamHandler(async ({ type, id }) => {
   return { streams: entries };
 });
 
+function fmtBytes(n) {
+  if (!n) return '0 B';
+  let v = Number(n);
+  const u = ['B', 'KB', 'MB', 'GB', 'TB'];
+  let i = 0;
+  while (v >= 1024 && i < u.length - 1) { v /= 1024; i++; }
+  return v.toFixed(i ? 1 : 0) + ' ' + u[i];
+}
+
 builder.defineCatalogHandler(async ({ type, id }) => {
   if (id !== 'lan-remote-downloads') return { metas: [] };
   const list = await fetchDownloads();
-  const metas = list
-    .filter((d) => d.status === 'done')
-    .map((d) => ({
+  const order = (s) => (s === 'downloading' ? 0 : s === 'done' ? 1 : 2);
+  const sorted = [...list].sort((a, b) => order(a.status) - order(b.status));
+  const metas = sorted.map((d) => {
+    let suffix = '';
+    if (d.status === 'downloading') {
+      const pct = d.total > 0 ? Math.round((d.bytes / d.total) * 100) : 0;
+      suffix = ` [Downloading ${pct}%]`;
+    } else if (d.status !== 'done') {
+      suffix = ` [${d.status}]`;
+    }
+    return {
       id: `lan-dl:${encodeURIComponent(d.filename)}`,
       type: 'movie',
-      name: prettyTitleFromFilename(d.filename),
-      description: `Downloaded to ${d.path}`,
+      name: prettyTitleFromFilename(d.filename) + suffix,
+      description:
+        d.status === 'done'
+          ? `Downloaded to ${d.path}`
+          : `${fmtBytes(d.bytes)} / ${fmtBytes(d.total)} — ${d.status}`,
       releaseInfo: '',
-    }));
+    };
+  });
   return { metas };
 });
 
