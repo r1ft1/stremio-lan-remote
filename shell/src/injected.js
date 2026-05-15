@@ -12,6 +12,15 @@
       }
     }
     emit({ event: "INSTALL", hasWorker: typeof window.Worker === "function" });
+    function heartbeat() {
+      try {
+        const h = window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.lan_remote_heartbeat;
+        if (h) h.postMessage("1");
+      } catch (e) {
+      }
+    }
+    heartbeat();
+    setInterval(heartbeat, 5e3);
     if (typeof window.Worker === "function") {
       let PatchedWorker = function(scriptURL, options) {
         const w = new OrigWorker(scriptURL, options);
