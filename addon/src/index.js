@@ -204,33 +204,123 @@ function fmtBytes(n) {
   return v.toFixed(i ? 1 : 0) + ' ' + u[i];
 }
 
+const CINEMETA_CACHE = new Map();
+const CINEMETA_TTL_MS = 24 * 60 * 60 * 1000;
+
+async function cinemetaLookup(metaId, type = 'movie') {
+  if (!metaId) return null;
+  const key = `${type}:${metaId}`;
+  const cached = CINEMETA_CACHE.get(key);
+  if (cached && cached.at + CINEMETA_TTL_MS > Date.now()) return cached.meta;
+  try {
+    const r = await fetch(`https://v3-cinemeta.strem.io/meta/${type}/${metaId}.json`);
+    if (!r.ok) {
+      CINEMETA_CACHE.set(key, { meta: null, at: Date.now() });
+      return null;
+    }
+    const j = await r.json();
+    const meta = j?.meta || null;
+    CINEMETA_CACHE.set(key, { meta, at: Date.now() });
+    return meta;
+  } catch (e) {
+    return null;
+  }
+}
+
+function parseFilename(filename) {
+  let s = String(filename).replace(/\.(mkv|mp4|webm|avi|mov|m4v)$/i, '');
+  s = s.replace(/[._]/g, ' ').replace(/\s+/g, ' ').trim();
+  const yearMatch = s.match(/\b(19\d{2}|20\d{2})\b/);
+  const year = yearMatch ? yearMatch[0] : '';
+  let title = s;
+  if (yearMatch) {
+    title = s.slice(0, yearMatch.index).trim();
+  } else {
+    title = s
+      .split(/\s+(?=1080p|720p|2160p|480p|4K|BluRay|BDRip|WEBRip|WEB-DL|HEVC|x264|x265|REMUX|HDR|DV|DDP)/i)[0]
+      .trim();
+  }
+  return { title, year };
+}
+
+async function cinemetaSearchByFilename(filename) {
+  const key = `filename:${filename}`;
+  const cached = CINEMETA_CACHE.get(key);
+  if (cached && cached.at + CINEMETA_TTL_MS > Date.now()) return cached.meta;
+  const { title, year } = parseFilename(filename);
+  if (!title) {
+    CINEMETA_CACHE.set(key, { meta: null, at: Date.now() });
+    return null;
+  }
+  try {
+    const r = await fetch(
+      `https://v3-cinemeta.strem.io/catalog/movie/top/search=${encodeURIComponent(title)}.json`
+    );
+    if (!r.ok) {
+      CINEMETA_CACHE.set(key, { meta: null, at: Date.now() });
+      return null;
+    }
+    const j = await r.json();
+    const metas = j?.metas || [];
+    let match = null;
+    if (year) {
+      match = metas.find((m) => String(m.releaseInfo || '').startsWith(year));
+    }
+    if (!match) match = metas[0] || null;
+    const full = match?.id ? await cinemetaLookup(match.id) : null;
+    CINEMETA_CACHE.set(key, { meta: full, at: Date.now() });
+    return full;
+  } catch (e) {
+    return null;
+  }
+}
+
 builder.defineCatalogHandler(async ({ type, id }) => {
   if (id !== 'lan-remote-downloads') return { metas: [] };
   const list = await fetchDownloads();
   const order = (s) => (s === 'downloading' ? 0 : s === 'done' ? 1 : 2);
   const sorted = [...list].sort((a, b) => order(a.status) - order(b.status));
-  const metas = sorted.map((d) => {
-    let suffix = '';
-    if (d.status === 'downloading') {
-      const pct = d.total > 0 ? Math.round((d.bytes / d.total) * 100) : 0;
-      suffix = ` [Downloading ${pct}%]`;
-    } else if (d.status !== 'done') {
-      suffix = ` [${d.status}]`;
-    }
-    const isInFlight = d.status === 'downloading' || d.status === 'interrupted';
-    const poster = isInFlight ? `${publicBase(config.publicHost)}/icons/download.svg` : undefined;
-    return {
-      id: `lan-dl:${encodeURIComponent(d.filename)}`,
-      type: 'movie',
-      name: prettyTitleFromFilename(d.filename) + suffix,
-      description:
+  const metas = await Promise.all(
+    sorted.map(async (d) => {
+      let suffix = '';
+      if (d.status === 'downloading') {
+        const pct = d.total > 0 ? Math.round((d.bytes / d.total) * 100) : 0;
+        suffix = ` [Downloading ${pct}%]`;
+      } else if (d.status !== 'done') {
+        suffix = ` [${d.status}]`;
+      }
+      const isInFlight = d.status === 'downloading' || d.status === 'interrupted';
+      const downloadPoster = `${publicBase(config.publicHost)}/icons/download.png`;
+      let cm = d.meta_id ? await cinemetaLookup(d.meta_id) : null;
+      if (!cm && (d.status === 'done' || d.status === 'unknown')) {
+        cm = await cinemetaSearchByFilename(d.filename);
+      }
+      const displayName =
+        cm?.name && d.status === 'done'
+          ? cm.name
+          : prettyTitleFromFilename(d.filename) + suffix;
+      const description =
         d.status === 'done'
-          ? `Downloaded to ${d.path}`
-          : `${fmtBytes(d.bytes)} / ${fmtBytes(d.total)} — ${d.status}`,
-      releaseInfo: '',
-      ...(poster ? { poster, posterShape: 'square' } : {}),
-    };
-  });
+          ? cm?.description || `Downloaded to ${d.path}`
+          : `${fmtBytes(d.bytes)} / ${fmtBytes(d.total)} — ${d.status}`;
+      const poster = isInFlight ? downloadPoster : cm?.poster || undefined;
+      const meta = {
+        id: `lan-dl:${encodeURIComponent(d.filename)}`,
+        type: 'movie',
+        name: displayName,
+        description,
+        releaseInfo: cm?.releaseInfo || '',
+      };
+      if (poster) {
+        meta.poster = poster;
+        meta.posterShape = isInFlight ? 'square' : cm?.posterShape || 'poster';
+      }
+      if (cm?.background) meta.background = cm.background;
+      if (cm?.logo) meta.logo = cm.logo;
+      if (cm?.genres) meta.genres = cm.genres;
+      return meta;
+    })
+  );
   return { metas, cacheMaxAge: 0, staleRevalidate: 0, staleError: 0 };
 });
 
@@ -239,14 +329,23 @@ builder.defineMetaHandler(async ({ type, id }) => {
   const filename = decodeURIComponent(id.slice('lan-dl:'.length));
   const list = await fetchDownloads();
   const entry = list.find((d) => d.filename === filename);
-  return {
-    meta: {
-      id,
-      type: 'movie',
-      name: prettyTitleFromFilename(filename),
-      description: entry ? `Downloaded to ${entry.path}` : 'Local file',
-    },
+  let cm = entry?.meta_id ? await cinemetaLookup(entry.meta_id) : null;
+  if (!cm && entry) cm = await cinemetaSearchByFilename(filename);
+  const meta = {
+    id,
+    type: 'movie',
+    name: cm?.name || prettyTitleFromFilename(filename),
+    description: cm?.description || (entry ? `Downloaded to ${entry.path}` : 'Local file'),
   };
+  if (cm?.poster) { meta.poster = cm.poster; meta.posterShape = cm.posterShape || 'poster'; }
+  if (cm?.background) meta.background = cm.background;
+  if (cm?.logo) meta.logo = cm.logo;
+  if (cm?.genres) meta.genres = cm.genres;
+  if (cm?.releaseInfo) meta.releaseInfo = cm.releaseInfo;
+  if (cm?.cast) meta.cast = cm.cast;
+  if (cm?.director) meta.director = cm.director;
+  if (cm?.runtime) meta.runtime = cm.runtime;
+  return { meta };
 });
 
 export const addonInterface = builder.getInterface();
