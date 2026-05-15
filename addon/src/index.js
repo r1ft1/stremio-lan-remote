@@ -105,6 +105,15 @@ function cancelDownloadEntry({ filename, publicHost }) {
   };
 }
 
+function resumeDownloadEntry({ filename, publicHost }) {
+  return {
+    name: `↻ Resume download`,
+    title: 'Continue the interrupted download on the Deck',
+    url: `${publicBase(publicHost)}/resume_download?filename=${encodeURIComponent(filename)}`,
+    behaviorHints: { notWebReady: true },
+  };
+}
+
 const builder = new addonBuilder(manifest);
 
 builder.defineStreamHandler(async ({ type, id }) => {
@@ -126,7 +135,23 @@ builder.defineStreamHandler(async ({ type, id }) => {
         streams: [cancelDownloadEntry({ filename, publicHost: config.publicHost })],
       };
     }
-    return { streams: [] };
+    if (entry.status === 'interrupted') {
+      return {
+        streams: [deleteDownloadEntry({ filename, publicHost: config.publicHost })],
+      };
+    }
+    if (entry.status === 'unknown') {
+      return {
+        streams: [
+          { ...localStreamEntry({ entry, publicHost: config.publicHost }),
+            title: 'Play local file (completeness unknown)' },
+          deleteDownloadEntry({ filename, publicHost: config.publicHost }),
+        ],
+      };
+    }
+    return {
+      streams: [deleteDownloadEntry({ filename, publicHost: config.publicHost })],
+    };
   }
   if (!config.streamResolverUrl) {
     return { streams: [] };

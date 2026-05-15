@@ -404,10 +404,32 @@ export function createServer({
       const base = (stream.title?.split('\n')[0] || stream.name?.replace(/\n/g, ' ') || `${id}-${stream.infoHash}`)
         .replace(/[^\w\-. ]+/g, '_').slice(0, 180);
       const filename = `${base}.mkv`;
+      const meta_id = String(id || '').split(':')[0];
       await fetchFn(`http://${shellHost}/download`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ url: sourceUrl, filename }),
+        body: JSON.stringify({ url: sourceUrl, filename, meta_id }),
+      }).catch(() => {});
+      res.set('Content-Type', 'video/mp4');
+      res.send(CONTROL_TINY);
+    } catch (e) {
+      res.status(502).send(e.message);
+    }
+  });
+
+  app.get('/resume_download', async (req, res) => {
+    try {
+      const filename = String(req.query.filename || '');
+      if (!filename) return res.status(400).send('missing filename');
+      const dl = await fetchFn(`http://${shellHost}/downloads`).then((r) => r.json()).catch(() => []);
+      const entry = (Array.isArray(dl) ? dl : []).find((d) => d.filename === filename);
+      if (!entry || !entry.source_url) {
+        return res.status(404).send('no resumable source URL');
+      }
+      await fetchFn(`http://${shellHost}/download`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url: entry.source_url, filename, meta_id: entry.meta_id || '' }),
       }).catch(() => {});
       res.set('Content-Type', 'video/mp4');
       res.send(CONTROL_TINY);
