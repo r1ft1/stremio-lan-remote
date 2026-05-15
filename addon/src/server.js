@@ -539,24 +539,39 @@ export function createServer({
           body: JSON.stringify(body),
         });
 
-      const navRes = await post(loadAction);
-      if (!navRes.ok) {
-        return res.status(502).send('shell dispatch failed');
+      const isValidInfoHash0 = (h) => typeof h === 'string' && /^[0-9a-f]{40}$/i.test(h);
+      const dryRun0 = req.query.dry_run === '1';
+      if (!dryRun0 && stream.infoHash && !isValidInfoHash0(stream.infoHash)) {
+        return res.status(400).send(`invalid infoHash: ${stream.infoHash}`);
+      }
+      if (!dryRun0) {
+        const navRes = await post(loadAction);
+        if (!navRes.ok) {
+          return res.status(502).send('shell dispatch failed');
+        }
       }
 
-      if (stream.infoHash) {
-        const streamUrl = `http://127.0.0.1:11470/${stream.infoHash}/${stream.fileIdx ?? 0}`;
-        await fetchFn(`http://${shellHost}/play_url`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ url: streamUrl }),
-        }).catch(() => {});
-      } else if (stream.url) {
-        await fetchFn(`http://${shellHost}/play_url`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ url: stream.url }),
-        }).catch(() => {});
+      const isValidInfoHash = (h) => typeof h === 'string' && /^[0-9a-f]{40}$/i.test(h);
+      const dryRun = req.query.dry_run === '1';
+
+      if (!dryRun) {
+        if (stream.infoHash) {
+          if (!isValidInfoHash(stream.infoHash)) {
+            return res.status(400).send(`invalid infoHash: ${stream.infoHash}`);
+          }
+          const streamUrl = `http://127.0.0.1:11470/${stream.infoHash}/${stream.fileIdx ?? 0}`;
+          await fetchFn(`http://${shellHost}/play_url`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ url: streamUrl }),
+          }).catch(() => {});
+        } else if (stream.url) {
+          await fetchFn(`http://${shellHost}/play_url`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ url: stream.url }),
+          }).catch(() => {});
+        }
       }
 
       if (req.query.placeholder === '1') {
