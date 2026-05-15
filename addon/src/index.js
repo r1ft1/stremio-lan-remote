@@ -31,16 +31,28 @@ function streamLabel(stream) {
   return `${quality}${seederTag} — ${filename}`.slice(0, 200);
 }
 
-function castEntryFor({ stream, type, id, publicHost }) {
+function queryFor(id, stream) {
   const isSeries = id.includes(':');
   const baseId = isSeries ? id.split(':')[0] : id;
-  const query = isSeries
+  return isSeries
     ? `id=${baseId}&season=${id.split(':')[1]}&episode=${id.split(':')[2]}&stream=${encodeStreamToken(stream)}`
     : `id=${baseId}&stream=${encodeStreamToken(stream)}`;
+}
+
+function castEntryFor({ stream, id, publicHost }) {
   return {
     name: `📺 Cast: ${streamLabel(stream)}`,
     title: 'Play on the Deck',
-    externalUrl: `http://${publicHost}/cast?${query}`,
+    externalUrl: `http://${publicHost}/cast?${queryFor(id, stream)}`,
+  };
+}
+
+function downloadEntryFor({ stream, id, publicHost }) {
+  return {
+    name: `⬇ Download: ${streamLabel(stream)}`,
+    title: 'Download to the Deck for later',
+    url: `http://${publicHost}/download_trigger?${queryFor(id, stream)}`,
+    behaviorHints: { notWebReady: true },
   };
 }
 
@@ -57,9 +69,14 @@ builder.defineStreamHandler(async ({ type, id }) => {
     return { streams: [] };
   }
   const sorted = [...streams].sort((a, b) => seederCount(b) - seederCount(a));
-  return {
-    streams: sorted.map((s) => castEntryFor({ stream: s, type, id, publicHost: config.publicHost })),
-  };
+  const entries = [];
+  for (const s of sorted) {
+    entries.push(castEntryFor({ stream: s, id, publicHost: config.publicHost }));
+    if (s.infoHash) {
+      entries.push(downloadEntryFor({ stream: s, id, publicHost: config.publicHost }));
+    }
+  }
+  return { streams: entries };
 });
 
 export const addonInterface = builder.getInterface();

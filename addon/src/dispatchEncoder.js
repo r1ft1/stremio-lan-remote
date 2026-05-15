@@ -53,6 +53,48 @@ export function encodePlayerLoad({ stream, metaId, videoId, type }) {
   };
 }
 
+export function encodePlayerPausedChanged(paused, playerHash) {
+  return {
+    action: {
+      action: 'Player',
+      args: {
+        action: 'PausedChanged',
+        args: { paused },
+      },
+    },
+    field: 'player',
+    locationHash: playerHash,
+  };
+}
+
+export function encodePlayerVideoParamsChanged(playerHash) {
+  return {
+    action: {
+      action: 'Player',
+      args: {
+        action: 'VideoParamsChanged',
+        args: { videoParams: null },
+      },
+    },
+    field: 'player',
+    locationHash: playerHash,
+  };
+}
+
+export function encodeStreamingServerGetStatistics(infoHash, fileIdx, playerHash) {
+  return {
+    action: {
+      action: 'StreamingServer',
+      args: {
+        action: 'GetStatistics',
+        args: { infoHash, fileIdx },
+      },
+    },
+    field: null,
+    locationHash: playerHash,
+  };
+}
+
 export function encodeSearch(query, maxResults = 10) {
   return {
     action: {
