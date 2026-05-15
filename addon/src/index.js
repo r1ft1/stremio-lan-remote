@@ -33,6 +33,11 @@ function streamLabel(stream) {
   return `${quality}${seederTag} — ${filename}`.slice(0, 200);
 }
 
+function publicBase(host) {
+  if (/^https?:\/\//i.test(host)) return host.replace(/\/+$/, '');
+  return `https://${host}`;
+}
+
 function queryFor(id, stream) {
   const isSeries = id.includes(':');
   const baseId = isSeries ? id.split(':')[0] : id;
@@ -45,7 +50,7 @@ function castEntryFor({ stream, id, publicHost }) {
   return {
     name: `📺 Cast: ${streamLabel(stream)}`,
     title: 'Play on the Deck',
-    externalUrl: `http://${publicHost}/cast?${queryFor(id, stream)}`,
+    externalUrl: `${publicBase(publicHost)}/cast?${queryFor(id, stream)}`,
   };
 }
 
@@ -53,7 +58,7 @@ function downloadEntryFor({ stream, id, publicHost }) {
   return {
     name: `⬇ Download: ${streamLabel(stream)}`,
     title: 'Download to the Deck for later',
-    url: `http://${publicHost}/download_trigger?${queryFor(id, stream)}`,
+    url: `${publicBase(publicHost)}/download_trigger?${queryFor(id, stream)}`,
     behaviorHints: { notWebReady: true },
   };
 }
@@ -78,7 +83,25 @@ function localStreamEntry({ entry, publicHost }) {
   return {
     name: `📺 Cast: ${prettyTitleFromFilename(entry.filename)}`,
     title: 'Play downloaded file on the Deck',
-    externalUrl: `http://${publicHost}/cast_local?stream=${token}&name=${encodeURIComponent(entry.filename)}`,
+    externalUrl: `${publicBase(publicHost)}/cast_local?stream=${token}&name=${encodeURIComponent(entry.filename)}`,
+  };
+}
+
+function deleteDownloadEntry({ filename, publicHost }) {
+  return {
+    name: `🗑 Delete download`,
+    title: 'Delete this downloaded file from the Deck',
+    url: `${publicBase(publicHost)}/delete_download?filename=${encodeURIComponent(filename)}`,
+    behaviorHints: { notWebReady: true },
+  };
+}
+
+function cancelDownloadEntry({ filename, publicHost }) {
+  return {
+    name: `✗ Cancel download`,
+    title: 'Cancel and remove the partial file from the Deck',
+    url: `${publicBase(publicHost)}/cancel_download?filename=${encodeURIComponent(filename)}`,
+    behaviorHints: { notWebReady: true },
   };
 }
 
@@ -89,10 +112,21 @@ builder.defineStreamHandler(async ({ type, id }) => {
     const filename = decodeURIComponent(id.slice('lan-dl:'.length));
     const list = await fetchDownloads();
     const entry = list.find((d) => d.filename === filename);
-    if (!entry || entry.status !== 'done') return { streams: [] };
-    return {
-      streams: [localStreamEntry({ entry, publicHost: config.publicHost })],
-    };
+    if (!entry) return { streams: [] };
+    if (entry.status === 'done') {
+      return {
+        streams: [
+          localStreamEntry({ entry, publicHost: config.publicHost }),
+          deleteDownloadEntry({ filename, publicHost: config.publicHost }),
+        ],
+      };
+    }
+    if (entry.status === 'downloading') {
+      return {
+        streams: [cancelDownloadEntry({ filename, publicHost: config.publicHost })],
+      };
+    }
+    return { streams: [] };
   }
   if (!config.streamResolverUrl) {
     return { streams: [] };
@@ -147,7 +181,7 @@ builder.defineCatalogHandler(async ({ type, id }) => {
       releaseInfo: '',
     };
   });
-  return { metas };
+  return { metas, cacheMaxAge: 0, staleRevalidate: 0, staleError: 0 };
 });
 
 builder.defineMetaHandler(async ({ type, id }) => {
