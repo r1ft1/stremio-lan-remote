@@ -42,6 +42,7 @@ pub struct StateSnapshot {
 #[derive(Default, Clone, Serialize)]
 pub struct DownloadEntry {
     pub filename: String,
+    pub path: String,
     pub source_url: String,
     pub bytes: u64,
     pub total: u64,
@@ -233,6 +234,7 @@ async fn start_download(State(state): State<AppState>, Json(body): Json<Download
         d.retain(|e| e.filename != filename);
         d.push(DownloadEntry {
             filename: filename.clone(),
+            path: dest.to_string_lossy().to_string(),
             source_url: url.clone(),
             bytes: 0,
             total: 0,

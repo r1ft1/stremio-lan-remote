@@ -4,13 +4,15 @@ import { resolveAllStreams } from './resolver.js';
 
 export const manifest = {
   id: 'dev.stremiolanremote.addon',
-  version: '0.3.0',
+  version: '0.4.0',
   name: 'LAN Remote',
   description: 'Cast playback to a Stremio LAN Remote desktop',
-  resources: ['stream'],
+  resources: ['stream', 'catalog', 'meta'],
   types: ['movie', 'series'],
-  catalogs: [],
-  idPrefixes: ['tt'],
+  catalogs: [
+    { type: 'movie', id: 'lan-remote-downloads', name: 'Deck Downloads' },
+  ],
+  idPrefixes: ['tt', 'lan-dl:'],
 };
 
 function encodeStreamToken(stream) {
@@ -56,9 +58,42 @@ function downloadEntryFor({ stream, id, publicHost }) {
   };
 }
 
+function prettyTitleFromFilename(filename) {
+  return String(filename).replace(/\.(mkv|mp4|webm|avi|mov)$/i, '').replace(/[._]/g, ' ');
+}
+
+async function fetchDownloads() {
+  try {
+    const r = await fetch(`http://${config.shellHost}/downloads`);
+    if (!r.ok) return [];
+    return await r.json();
+  } catch (e) {
+    return [];
+  }
+}
+
+function localStreamEntry({ entry, publicHost }) {
+  const localUrl = `file://${entry.path}`;
+  const token = encodeStreamToken({ url: localUrl, name: entry.filename });
+  return {
+    name: `📺 Cast: ${prettyTitleFromFilename(entry.filename)}`,
+    title: 'Play downloaded file on the Deck',
+    externalUrl: `http://${publicHost}/cast_local?stream=${token}&name=${encodeURIComponent(entry.filename)}`,
+  };
+}
+
 const builder = new addonBuilder(manifest);
 
 builder.defineStreamHandler(async ({ type, id }) => {
+  if (id.startsWith('lan-dl:')) {
+    const filename = decodeURIComponent(id.slice('lan-dl:'.length));
+    const list = await fetchDownloads();
+    const entry = list.find((d) => d.filename === filename);
+    if (!entry || entry.status !== 'done') return { streams: [] };
+    return {
+      streams: [localStreamEntry({ entry, publicHost: config.publicHost })],
+    };
+  }
   if (!config.streamResolverUrl) {
     return { streams: [] };
   }
@@ -77,6 +112,36 @@ builder.defineStreamHandler(async ({ type, id }) => {
     }
   }
   return { streams: entries };
+});
+
+builder.defineCatalogHandler(async ({ type, id }) => {
+  if (id !== 'lan-remote-downloads') return { metas: [] };
+  const list = await fetchDownloads();
+  const metas = list
+    .filter((d) => d.status === 'done')
+    .map((d) => ({
+      id: `lan-dl:${encodeURIComponent(d.filename)}`,
+      type: 'movie',
+      name: prettyTitleFromFilename(d.filename),
+      description: `Downloaded to ${d.path}`,
+      releaseInfo: '',
+    }));
+  return { metas };
+});
+
+builder.defineMetaHandler(async ({ type, id }) => {
+  if (!id.startsWith('lan-dl:')) return { meta: null };
+  const filename = decodeURIComponent(id.slice('lan-dl:'.length));
+  const list = await fetchDownloads();
+  const entry = list.find((d) => d.filename === filename);
+  return {
+    meta: {
+      id,
+      type: 'movie',
+      name: prettyTitleFromFilename(filename),
+      description: entry ? `Downloaded to ${entry.path}` : 'Local file',
+    },
+  };
 });
 
 export const addonInterface = builder.getInterface();
