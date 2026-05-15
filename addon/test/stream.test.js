@@ -43,7 +43,7 @@ describe('stream handler', () => {
     mockStreams = [{ name: 'Torrentio\n1080p', infoHash: 'aaa', fileIdx: 0 }];
     const res = await addonInterface.get('stream', 'movie', 'tt2222002');
     const url = castStreams(res)[0].externalUrl;
-    expect(url).toMatch(/^http:\/\/192\.168\.1\.10:7000\/cast\?id=tt2222002&stream=/);
+    expect(url).toMatch(/^https:\/\/192\.168\.1\.10:7000\/cast\?id=tt2222002&stream=/);
     const streamParam = new URL(url).searchParams.get('stream');
     const decoded = JSON.parse(Buffer.from(streamParam, 'base64url').toString('utf8'));
     expect(decoded.infoHash).toBe('aaa');

@@ -88,6 +88,11 @@ struct DownloadBody {
     filename: String,
 }
 
+#[derive(Deserialize)]
+struct DownloadByName {
+    filename: String,
+}
+
 pub fn router(state: AppState) -> Router {
     Router::new()
         .route("/dispatch", post(dispatch))
@@ -105,6 +110,8 @@ pub fn router(state: AppState) -> Router {
         .route("/fullscreen", post(toggle_fullscreen))
         .route("/download", post(start_download))
         .route("/downloads", get(get_downloads))
+        .route("/cancel_download", post(cancel_download))
+        .route("/delete_download", post(delete_download))
         .route("/state", get(get_state))
         .with_state(state)
 }
@@ -285,14 +292,73 @@ async fn download_to_file(
         let chunk = chunk?;
         file.write_all(&chunk).await?;
         bytes += chunk.len() as u64;
-        if let Ok(mut d) = downloads.lock() {
+        let cancelled = {
+            let mut d = downloads.lock().unwrap();
             if let Some(e) = d.iter_mut().find(|e| e.filename == filename) {
                 e.bytes = bytes;
+                e.status == "cancelled"
+            } else {
+                false
             }
+        };
+        if cancelled {
+            anyhow::bail!("cancelled");
         }
     }
     file.flush().await?;
     Ok(())
+}
+
+async fn cancel_download(State(state): State<AppState>, Json(body): Json<DownloadByName>) -> StatusCode {
+    let filename = sanitize_filename(&body.filename);
+    let path = state.download_dir.join(&filename);
+    let still_downloading = {
+        let mut d = state.downloads.lock().unwrap();
+        match d.iter_mut().find(|e| e.filename == filename) {
+            Some(e) if e.status == "downloading" => {
+                e.status = "cancelled".into();
+                true
+            }
+            _ => false,
+        }
+    };
+    if !still_downloading {
+        return StatusCode::NOT_FOUND;
+    }
+    let downloads = state.downloads.clone();
+    let filename_clone = filename.clone();
+    tokio::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_millis(800)).await;
+        let _ = tokio::fs::remove_file(&path).await;
+        let mut d = downloads.lock().unwrap();
+        d.retain(|e| e.filename != filename_clone);
+        info!(target: "lan_remote", "cancelled and removed {filename_clone}");
+    });
+    StatusCode::ACCEPTED
+}
+
+async fn delete_download(State(state): State<AppState>, Json(body): Json<DownloadByName>) -> StatusCode {
+    let filename = sanitize_filename(&body.filename);
+    let path = state.download_dir.join(&filename);
+    let was_done = {
+        let d = state.downloads.lock().unwrap();
+        d.iter().any(|e| e.filename == filename && e.status == "done")
+    };
+    if !was_done {
+        return StatusCode::NOT_FOUND;
+    }
+    match tokio::fs::remove_file(&path).await {
+        Ok(_) => {
+            let mut d = state.downloads.lock().unwrap();
+            d.retain(|e| e.filename != filename);
+            info!(target: "lan_remote", "deleted {filename}");
+            StatusCode::OK
+        }
+        Err(e) => {
+            error!(target: "lan_remote", "delete_download remove_file failed: {e}");
+            StatusCode::INTERNAL_SERVER_ERROR
+        }
+    }
 }
 
 fn sanitize_filename(name: &str) -> String {

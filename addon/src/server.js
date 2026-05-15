@@ -295,6 +295,11 @@ export function createServer({
 
   app.use(express.json());
 
+  app.get('/test_fixture.mp4', (_req, res) => {
+    res.set('Content-Type', 'video/mp4');
+    res.send(PLACEHOLDER);
+  });
+
   app.post('/seek_abs', async (req, res) => {
     try {
       const r = await fetchFn(`http://${shellHost}/seek_abs`, {
@@ -352,6 +357,38 @@ export function createServer({
       const title = String(req.query.name || stream.name || 'Local file');
       res.set('Content-Type', 'text/html; charset=utf-8');
       res.send(controllerHtml(title, 'stremio:///'));
+    } catch (e) {
+      res.status(502).send(e.message);
+    }
+  });
+
+  app.get('/cancel_download', async (req, res) => {
+    try {
+      const filename = String(req.query.filename || '');
+      if (!filename) return res.status(400).send('missing filename');
+      await fetchFn(`http://${shellHost}/cancel_download`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ filename }),
+      }).catch(() => {});
+      res.set('Content-Type', 'video/mp4');
+      res.send(CONTROL_TINY);
+    } catch (e) {
+      res.status(502).send(e.message);
+    }
+  });
+
+  app.get('/delete_download', async (req, res) => {
+    try {
+      const filename = String(req.query.filename || '');
+      if (!filename) return res.status(400).send('missing filename');
+      await fetchFn(`http://${shellHost}/delete_download`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ filename }),
+      }).catch(() => {});
+      res.set('Content-Type', 'video/mp4');
+      res.send(CONTROL_TINY);
     } catch (e) {
       res.status(502).send(e.message);
     }
