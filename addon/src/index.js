@@ -289,21 +289,14 @@ builder.defineCatalogHandler(async ({ type, id }) => {
       } else if (d.status !== 'done') {
         suffix = ` [${d.status}]`;
       }
-      const isInFlight = d.status === 'downloading' || d.status === 'interrupted';
-      const downloadPoster = `${publicBase(config.publicHost)}/icons/download.png`;
       let cm = d.meta_id ? await cinemetaLookup(d.meta_id) : null;
-      if (!cm && (d.status === 'done' || d.status === 'unknown')) {
-        cm = await cinemetaSearchByFilename(d.filename);
-      }
-      const displayName =
-        cm?.name && d.status === 'done'
-          ? cm.name
-          : prettyTitleFromFilename(d.filename) + suffix;
+      if (!cm) cm = await cinemetaSearchByFilename(d.filename);
+      const baseName = cm?.name || prettyTitleFromFilename(d.filename);
+      const displayName = d.status === 'done' ? baseName : baseName + suffix;
       const description =
         d.status === 'done'
           ? cm?.description || `Downloaded to ${d.path}`
           : `${fmtBytes(d.bytes)} / ${fmtBytes(d.total)} — ${d.status}`;
-      const poster = isInFlight ? downloadPoster : cm?.poster || undefined;
       const meta = {
         id: `lan-dl:${encodeURIComponent(d.filename)}`,
         type: 'movie',
@@ -311,9 +304,9 @@ builder.defineCatalogHandler(async ({ type, id }) => {
         description,
         releaseInfo: cm?.releaseInfo || '',
       };
-      if (poster) {
-        meta.poster = poster;
-        meta.posterShape = isInFlight ? 'square' : cm?.posterShape || 'poster';
+      if (cm?.poster) {
+        meta.poster = cm.poster;
+        meta.posterShape = cm.posterShape || 'poster';
       }
       if (cm?.background) meta.background = cm.background;
       if (cm?.logo) meta.logo = cm.logo;
