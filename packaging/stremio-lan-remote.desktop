@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=Stremio LAN Remote
+GenericName=Media Center
+Comment=Stremio fork with LAN-cast addon for SteamDeck
+Exec=/home/deck/dev/stremio-lan-remote/scripts/launch-stremio.sh
+Icon=stremio
+Terminal=false
+Categories=AudioVideo;Player;Video;
+StartupNotify=true
+StartupWMClass=stremio-linux-shell
