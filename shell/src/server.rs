@@ -16,14 +16,17 @@ const STREAMING_SERVER_PORT: u16 = 11470;
 
 pub struct Server {
     child: Arc<Mutex<Option<Child>>>,
-    file: PathBuf,
+    file: Option<PathBuf>,
     dev: bool,
 }
 
 impl Server {
     pub fn new() -> Self {
-        let server_path = env::var("SERVER_PATH").expect("Failed to read SERVER_PATH env");
-        let file = PathBuf::from(&server_path);
+        // SERVER_PATH is optional: when a shared streaming-server is managed
+        // externally (e.g. the stremio-lan-remote-server.service systemd unit),
+        // the shell reuses it and never needs to spawn — so a missing
+        // SERVER_PATH must not panic at construction.
+        let file = env::var("SERVER_PATH").ok().map(PathBuf::from);
 
         Self {
             child: Arc::new(Mutex::new(None)),
@@ -47,11 +50,19 @@ impl Server {
             warn!(target: "server", "port {STREAMING_SERVER_PORT} already in use before launch — likely a stale streaming-server. mpv playback will fail until it is freed.");
         }
 
-        let child = spawn_node(&self.file, dev)?;
+        let file = match &self.file {
+            Some(f) => f.clone(),
+            None => {
+                return Err(anyhow!(
+                    "no streaming-server running on port {STREAMING_SERVER_PORT} and SERVER_PATH is unset; cannot spawn one"
+                ));
+            }
+        };
+
+        let child = spawn_node(&file, dev)?;
         *self.child.lock().unwrap() = Some(child);
 
         let child_handle = self.child.clone();
-        let file = self.file.clone();
         thread::spawn(move || supervise(child_handle, file, dev));
 
         Ok(())
