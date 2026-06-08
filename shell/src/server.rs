@@ -35,6 +35,14 @@ impl Server {
     pub fn start(&mut self, dev: bool) -> anyhow::Result<()> {
         self.dev = dev;
 
+        // If a shared streaming-server is already running (e.g. the
+        // stremio-lan-remote-server.service systemd unit), reuse it instead of
+        // spawning + supervising our own. Avoids a port conflict on 11470.
+        if Self::check_streaming_server(std::time::Duration::from_secs(1)).is_ok() {
+            info!(target: "server", "streaming-server already running on port {STREAMING_SERVER_PORT}, reusing it");
+            return Ok(());
+        }
+
         if port_in_use(STREAMING_SERVER_PORT) {
             warn!(target: "server", "port {STREAMING_SERVER_PORT} already in use before launch — likely a stale streaming-server. mpv playback will fail until it is freed.");
         }
