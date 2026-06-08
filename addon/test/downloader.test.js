@@ -3,7 +3,7 @@ import { mkdtemp, writeFile, readFile, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createServer } from 'node:http';
-import { initDownloads, getDownloads, saveDownloads, startDownload, deleteDownload } from '../src/downloader.js';
+import { initDownloads, getDownloads, saveDownloads, startDownload, deleteDownload, cancelDownload } from '../src/downloader.js';
 
 async function tmp() { return mkdtemp(join(tmpdir(), 'dl-')); }
 
@@ -104,5 +104,78 @@ describe('downloader delete', () => {
     await deleteDownload('z.mkv');
     expect(getDownloads().find((e) => e.filename === 'z.mkv')).toBeUndefined();
     await expect(stat(join(dir, 'z.mkv'))).rejects.toThrow();
+  });
+});
+
+describe('downloader robustness', () => {
+  it('resume via 206: appends partial download to produce full file', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'dl-'));
+    await initDownloads(dir);
+    const buf = Buffer.alloc(500, 0x61); // 500 bytes of 'a'
+    const partial = buf.subarray(0, 100);
+    const filename = 'resume.mkv';
+    const dest = join(dir, filename);
+
+    // Pre-write 100 bytes so stat will find resumeFrom = 100
+    await writeFile(dest, partial);
+    // Seed the LIST entry so downloader sees it as known
+    getDownloads().push({ filename, path: dest, source_url: '', bytes: 100, total: 500, status: 'interrupted', meta_id: '' });
+
+    const server = rangeServer(buf);
+    const port = await listen(server);
+    const ok = startDownload({ url: `http://127.0.0.1:${port}/resume`, filename, meta_id: '', dir });
+    expect(ok).toBe(true);
+    const e = await waitDone(filename);
+    expect(e.status).toBe('done');
+    const finalBuf = await readFile(dest);
+    expect(finalBuf.length).toBe(buf.length);
+    expect(finalBuf.equals(buf)).toBe(true);
+    server.close();
+  });
+
+  it('error status on non-ok HTTP: sets error: HTTP 404', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'dl-'));
+    await initDownloads(dir);
+    const server404 = createServer((_req, res) => { res.statusCode = 404; res.end('Not Found'); });
+    const port = await listen(server404);
+    const filename = 'notfound.mkv';
+    const ok = startDownload({ url: `http://127.0.0.1:${port}/nope`, filename, meta_id: '', dir });
+    expect(ok).toBe(true);
+    const e = await waitDone(filename);
+    expect(e.status).toMatch(/^error: HTTP 404/);
+    server404.close();
+  });
+
+  it('cancel sets cancelled: cancelDownload stops an in-flight download', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'dl-'));
+    await initDownloads(dir);
+
+    // Slow server: writes body in small chunks with delays so the download stays in-flight
+    const chunkSize = 1024;
+    const totalChunks = 50;
+    const slowServer = createServer((_req, res) => {
+      res.statusCode = 200;
+      res.setHeader('Content-Length', String(chunkSize * totalChunks));
+      let i = 0;
+      function sendChunk() {
+        if (i >= totalChunks) { res.end(); return; }
+        res.write(Buffer.alloc(chunkSize, 0x62));
+        i++;
+        setTimeout(sendChunk, 20);
+      }
+      sendChunk();
+    });
+    const port = await listen(slowServer);
+    const filename = 'slow.mkv';
+    const ok = startDownload({ url: `http://127.0.0.1:${port}/slow`, filename, meta_id: '', dir });
+    expect(ok).toBe(true);
+
+    // Give the download a moment to start receiving
+    await new Promise((r) => setTimeout(r, 30));
+    cancelDownload(filename);
+
+    const e = await waitDone(filename, 5000);
+    expect(e.status).toBe('cancelled');
+    slowServer.close();
   });
 });
