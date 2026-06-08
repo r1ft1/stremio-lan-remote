@@ -1,6 +1,7 @@
 import { addonBuilder } from 'stremio-addon-sdk';
 import { config } from './config.js';
 import { resolveAllStreams } from './resolver.js';
+import { getDownloads } from './downloader.js';
 
 export const manifest = {
   id: 'dev.stremiolanremote.addon',
@@ -88,13 +89,7 @@ function prettyTitleFromFilename(filename) {
 }
 
 async function fetchDownloads() {
-  try {
-    const r = await fetch(`http://${config.shellHost}/downloads`);
-    if (!r.ok) return [];
-    return await r.json();
-  } catch (e) {
-    return [];
-  }
+  return getDownloads();
 }
 
 function localStreamEntry({ entry, publicHost }) {

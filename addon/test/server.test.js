@@ -104,3 +104,15 @@ describe('manifest served by Express server', () => {
     expect(res.body.resources).toContain('stream');
   });
 });
+
+import { _setStateForTest } from '../src/downloader.js';
+
+describe('addon-owned downloads', () => {
+  it('/downloads returns the local downloader list', async () => {
+    _setStateForTest('/tmp', [{ filename: 'a.mkv', status: 'done', meta_id: 'tt1:1:1' }]);
+    const app = createServer({ fetch: vi.fn(), shellHost: '127.0.0.1:7001' });
+    const res = await request(app).get('/downloads');
+    expect(res.status).toBe(200);
+    expect(res.body[0].filename).toBe('a.mkv');
+  });
+});
