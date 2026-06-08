@@ -1,0 +1,14 @@
+[Unit]
+Description=Stremio LAN Remote streaming-server
+After=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/.local/share/stremio-lan-remote
+ExecStart=/usr/bin/node %h/.local/share/stremio-lan-remote/server.js
+Restart=on-failure
+RestartSec=5s
+Environment="NO_CORS=1"
+
+[Install]
+WantedBy=default.target

@@ -29,3 +29,21 @@ systemctl --user disable --now stremio-lan-remote-addon.service
 rm -rf ~/.local/share/stremio-lan-remote ~/.config/systemd/user/stremio-lan-remote-addon.service
 flatpak uninstall --user dev.stremiolanremote.Stremio
 ```
+
+## Always-on streaming-server (headless downloads)
+
+Copy `shell/data/server.js` to `~/.local/share/stremio-lan-remote/server.js`, then:
+
+```bash
+mkdir -p ~/.config/systemd/user
+cp packaging/stremio-lan-remote-server.service ~/.config/systemd/user/
+systemctl --user daemon-reload
+systemctl --user enable --now stremio-lan-remote-server.service
+loginctl enable-linger "$USER"   # keep services running while idle / across sleep
+```
+
+Verify it is listening with the app closed:
+
+```bash
+curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:11470/  # expect 200
+```
