@@ -116,3 +116,21 @@ describe('addon-owned downloads', () => {
     expect(res.body[0].filename).toBe('a.mkv');
   });
 });
+
+import { loadSubs } from '../src/subscriptions.js';
+import { config } from '../src/config.js';
+import { mkdtemp } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+
+describe('subscribe endpoints', () => {
+  it('subscribe then unsubscribe updates the store', async () => {
+    config.downloadDir = await mkdtemp(join(tmpdir(), 'subep-'));
+    const app = createServer({ fetch: vi.fn(), shellHost: '127.0.0.1:7001' });
+    const r1 = await request(app).get('/subscribe?id=tt0903747');
+    expect(r1.status).toBe(200);
+    expect((await loadSubs(config.downloadDir)).map((s) => s.seriesId)).toContain('tt0903747');
+    await request(app).get('/unsubscribe?id=tt0903747');
+    expect((await loadSubs(config.downloadDir))).toHaveLength(0);
+  });
+});

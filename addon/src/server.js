@@ -14,6 +14,7 @@ import {
 import { resolveBestStream } from './resolver.js';
 import { config } from './config.js';
 import { startDownload, cancelDownload, deleteDownload, getDownloads } from './downloader.js';
+import { addSub, removeSub } from './subscriptions.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PLACEHOLDER = readFileSync(resolve(__dirname, '../assets/casting.mp4'));
@@ -473,6 +474,28 @@ export function createServer({
     if (!url || !filename) return res.status(400).end();
     const ok = startDownload({ url, filename, meta_id, dir: config.downloadDir });
     res.status(ok ? 202 : 409).end();
+  });
+
+  function bounceHtml(msg) {
+    return '<!doctype html><meta charset="utf-8"><title>Subscriptions</title>' +
+      '<style>body{background:#0f0f12;color:#eaeaf2;font-family:-apple-system,sans-serif;display:flex;align-items:center;justify-content:center;height:100vh;margin:0;padding:0 20px;text-align:center}</style>' +
+      `<div><p>${msg}</p></div><script>setTimeout(function(){location.href="stremio:///"},400)</script>`;
+  }
+
+  app.get('/subscribe', async (req, res) => {
+    const id = String(req.query.id || '').split(':')[0];
+    if (!id) return res.status(400).send('missing id');
+    await addSub(config.downloadDir, id, new Date().toISOString());
+    res.set('Content-Type', 'text/html; charset=utf-8');
+    res.send(bounceHtml('🔔 Subscribed — new 1080p episodes will auto-download.'));
+  });
+
+  app.get('/unsubscribe', async (req, res) => {
+    const id = String(req.query.id || '').split(':')[0];
+    if (!id) return res.status(400).send('missing id');
+    await removeSub(config.downloadDir, id);
+    res.set('Content-Type', 'text/html; charset=utf-8');
+    res.send(bounceHtml('🔕 Unsubscribed.'));
   });
 
   app.get('/control', async (req, res) => {
