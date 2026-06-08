@@ -12,7 +12,12 @@ function is1080p(stream) {
 // Conservative: only skip a release when it is tagged with a single foreign
 // language AND shows no English/MULTi marker. Errs toward keeping a release.
 function isForeignOnly(stream) {
-  const text = `${stream.name || ''} ${stream.title || ''}`;
+  const title = `${stream.name || ''} ${stream.title || ''}`;
+  // Only inspect the portion after the first SxxExx/quality marker, so a show
+  // TITLE that starts with a language word (e.g. "Russian Doll") isn't treated
+  // as a foreign-language tag.
+  const m = title.match(/[._ ](?:S\d{2}E\d{2}|1080p|720p|2160p)/i);
+  const text = m ? title.slice(m.index) : title;
   const foreign = /\b(VOSTFR|TRUEFRENCH|FRENCH|GERMAN|ITA|ITALIAN|SPANISH|CASTELLANO|LATINO|HINDI|RUSSIAN|KOREAN|JAPANESE|POLISH|PL|NORDIC|DUBBED)\b/i.test(text);
   const english = /\b(ENG|ENGLISH|MULTI)\b/i.test(text);
   return foreign && !english;

@@ -41,4 +41,21 @@ describe('pickRelease', () => {
     const streams = [{ name: '1080p', title: 'X.1080p\n👤 900', url: 'http://x' }];
     expect(pickRelease(streams, { minSeeders: 3 })).toBeNull();
   });
+
+  it('keeps a release whose show title starts with a language word (false-positive guard)', () => {
+    // "Russian" appears in the show title, not as a language tag — must not be filtered.
+    const streams = [s('1080p', 'Russian.Doll.S01E01.1080p.WEB-DL.NF\n👤 100')];
+    const r = pickRelease(streams, { minSeeders: 3 });
+    expect(r).not.toBeNull();
+    expect(r.title).toMatch(/Russian\.Doll/);
+  });
+
+  it('still skips a genuine post-marker foreign tag when an English release is also present', () => {
+    const streams = [
+      s('1080p', 'X.S01E01.1080p.GERMAN\n👤 900'),
+      s('1080p', 'X.S01E01.1080p.WEB-DL\n👤 50'),
+    ];
+    const r = pickRelease(streams, { minSeeders: 3 });
+    expect(r.title).toMatch(/WEB-DL/);
+  });
 });

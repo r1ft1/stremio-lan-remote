@@ -60,6 +60,18 @@ describe('pollOnce', () => {
     await pollOnce(d);
     expect(d.startDownload).not.toHaveBeenCalled();
   });
+
+  it('retries an interrupted episode (calls startDownload)', async () => {
+    const d = deps({ getDownloads: () => [{ meta_id: 'tt1:1:5', status: 'interrupted' }] });
+    await pollOnce(d);
+    expect(d.startDownload).toHaveBeenCalledTimes(1);
+  });
+
+  it('skips a cancelled episode (does not call startDownload)', async () => {
+    const d = deps({ getDownloads: () => [{ meta_id: 'tt1:1:5', status: 'cancelled' }] });
+    await pollOnce(d);
+    expect(d.startDownload).not.toHaveBeenCalled();
+  });
 });
 
 describe('buildDeps', () => {

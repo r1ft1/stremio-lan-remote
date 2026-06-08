@@ -4,7 +4,13 @@ import { loadSubs } from './subscriptions.js';
 import { getDownloads, startDownload } from './downloader.js';
 
 function isHandled(downloads, metaId) {
-  return downloads.some((d) => d.meta_id === metaId && !String(d.status).startsWith('error'));
+  return downloads.some((d) => {
+    if (d.meta_id !== metaId) return false;
+    const status = String(d.status);
+    if (status.startsWith('error')) return false;   // retry failed downloads
+    if (status === 'interrupted') return false;      // retry → startDownload resumes from partial file
+    return true;                                      // done / downloading / cancelled / unknown block
+  });
 }
 
 export async function pollOnce(deps) {
