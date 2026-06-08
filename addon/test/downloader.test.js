@@ -3,7 +3,7 @@ import { mkdtemp, writeFile, readFile, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createServer } from 'node:http';
-import { initDownloads, getDownloads, saveDownloads, startDownload } from '../src/downloader.js';
+import { initDownloads, getDownloads, saveDownloads, startDownload, deleteDownload } from '../src/downloader.js';
 
 async function tmp() { return mkdtemp(join(tmpdir(), 'dl-')); }
 
@@ -92,5 +92,17 @@ describe('downloader execution', () => {
     expect(startDownload({ url: `http://127.0.0.1:${port}/y`, filename: 'y.mkv', meta_id: '', dir })).toBe(false);
     await waitDone('y.mkv');
     server.close();
+  });
+});
+
+describe('downloader delete', () => {
+  it('removes the entry and the file', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'dl-'));
+    await initDownloads(dir);
+    await writeFile(join(dir, 'z.mkv'), 'data');
+    getDownloads().push({ filename: 'z.mkv', path: join(dir, 'z.mkv'), status: 'done' });
+    await deleteDownload('z.mkv');
+    expect(getDownloads().find((e) => e.filename === 'z.mkv')).toBeUndefined();
+    await expect(stat(join(dir, 'z.mkv'))).rejects.toThrow();
   });
 });

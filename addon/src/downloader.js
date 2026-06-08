@@ -1,4 +1,4 @@
-import { mkdir, readFile, writeFile, stat } from 'node:fs/promises';
+import { mkdir, readFile, writeFile, stat, unlink } from 'node:fs/promises';
 import { createWriteStream } from 'node:fs';
 import { join } from 'node:path';
 import { Readable } from 'node:stream';
@@ -113,4 +113,13 @@ export function cancelDownload(filename) {
   cancelled.add(safe);
   const e = LIST.find((x) => x.filename === safe);
   if (e && e.status === 'downloading') e.status = 'cancelled';
+}
+
+export async function deleteDownload(filename) {
+  const safe = sanitizeFilename(filename);
+  cancelled.add(safe);
+  const e = LIST.find((x) => x.filename === safe);
+  if (e?.path) { try { await unlink(e.path); } catch {} }
+  LIST = LIST.filter((x) => x.filename !== safe);
+  await saveDownloads(DIR, LIST);
 }
