@@ -1,7 +1,7 @@
 process.env.STREAM_RESOLVER_URL = 'http://upstream';
 process.env.PUBLIC_HOST = '192.168.1.10:7000';
 
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 let mockStreams = [];
 let throwInResolver = false;
@@ -84,4 +84,21 @@ describe('stream handler', () => {
     expect(decoded0.infoHash).toBe('high');
   });
 
+});
+
+describe('subscribe action in stream list', () => {
+  let config;
+  beforeEach(async () => {
+    ({ config } = await import('../src/config.js'));
+    const { mkdtemp } = await import('node:fs/promises');
+    const { tmpdir } = await import('node:os');
+    const { join } = await import('node:path');
+    config.downloadDir = await mkdtemp(join(tmpdir(), 'streamsub-'));
+    config.streamResolverUrl = '';
+  });
+
+  it('offers Subscribe on a series episode when not subscribed', async () => {
+    const { streams } = await addonInterface.get('stream', 'series', 'tt0903747:1:1');
+    expect(streams.some((s) => /Subscribe/i.test(s.name))).toBe(true);
+  });
 });
