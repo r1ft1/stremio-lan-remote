@@ -1,5 +1,7 @@
 import { pickRelease } from './releaseSelect.js';
 import { config } from './config.js';
+import { loadSubs } from './subscriptions.js';
+import { getDownloads, startDownload } from './downloader.js';
 
 function isHandled(downloads, metaId) {
   return downloads.some((d) => d.meta_id === metaId && !String(d.status).startsWith('error'));
@@ -39,4 +41,42 @@ export async function pollOnce(deps) {
       deps.startDownload({ url, filename: `${base}.mkv`, meta_id: metaId, dir: config.downloadDir });
     }
   }
+}
+
+export function buildDeps({ fetchFn = fetch } = {}) {
+  return {
+    now: () => Date.now(),
+    minSeeders: config.minSeeders,
+    retryWindowMs: config.retryWindowMs,
+    loadSubs: () => loadSubs(config.downloadDir),
+    getDownloads,
+    startDownload,
+    cinemetaEpisodes: async (seriesId) => {
+      const r = await fetchFn(`https://v3-cinemeta.strem.io/meta/series/${seriesId}.json`);
+      if (!r.ok) return [];
+      const j = await r.json();
+      return (j?.meta?.videos || []).map((v) => ({
+        season: v.season,
+        episode: v.number ?? v.episode,
+        released: v.released,
+      }));
+    },
+    torrentioStreams: async (type, id) => {
+      if (!config.streamResolverUrl) return [];
+      const r = await fetchFn(`${config.streamResolverUrl}/stream/${type}/${id}.json`);
+      if (!r.ok) return [];
+      const j = await r.json();
+      return j?.streams || [];
+    },
+  };
+}
+
+let timer = null;
+
+export function startPoller() {
+  const deps = buildDeps();
+  const tick = () => { pollOnce(deps).catch((e) => console.error('poll error', e)); };
+  tick();
+  timer = setInterval(tick, config.pollIntervalMs);
+  return () => clearInterval(timer);
 }

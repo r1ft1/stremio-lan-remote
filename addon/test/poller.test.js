@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { pollOnce } from '../src/poller.js';
+import { pollOnce, buildDeps } from '../src/poller.js';
 
 const NOW = new Date('2026-06-08T12:00:00Z').getTime();
 
@@ -59,5 +59,17 @@ describe('pollOnce', () => {
     });
     await pollOnce(d);
     expect(d.startDownload).not.toHaveBeenCalled();
+  });
+});
+
+describe('buildDeps', () => {
+  it('wires cinemetaEpisodes to return {season,episode,released} objects', async () => {
+    const fakeFetch = vi.fn(async () => ({
+      ok: true,
+      json: async () => ({ meta: { videos: [{ season: 1, number: 2, released: '2026-01-01' }] } }),
+    }));
+    const deps = buildDeps({ fetchFn: fakeFetch });
+    const eps = await deps.cinemetaEpisodes('tt1');
+    expect(eps[0]).toMatchObject({ season: 1, episode: 2, released: '2026-01-01' });
   });
 });
