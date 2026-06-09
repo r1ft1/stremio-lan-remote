@@ -1,0 +1,22 @@
+# Stremio LAN Remote: power-key filter
+#
+# Keep the physical SteamDeck power button (PNP0C0C, event0) working as
+# normal, but remove the `power-switch` tag from sources that have caused
+# spurious system suspends — the synthetic ACPI button (LNXPWRBN, event2,
+# fired by ACPI events from HDMI-CEC / docks / USB-PD) and any paired
+# Bluetooth keyboard with a power key.
+#
+# After installing, run:
+#   sudo udevadm control --reload
+#   sudo udevadm trigger
+# Then `loginctl show-session $(loginctl | awk '/seat0/{print $1; exit}') | grep -i power`
+# should reflect the change on next session.
+
+SUBSYSTEM=="input", ENV{ID_PATH}=="acpi-LNXPWRBN:00", TAG-="power-switch"
+SUBSYSTEM=="input", KERNELS=="LNXPWRBN:00", TAG-="power-switch"
+
+# Logitech MX Keys M Mac Keyboard — has a Mac power key.
+SUBSYSTEM=="input", ATTRS{name}=="MX Keys M Mac Keyboard", TAG-="power-switch"
+
+# Headset jack — KEY_POWER can be raised by some headset mic buttons.
+SUBSYSTEM=="input", ATTRS{name}=="sof-nau8821-max Headset Jack", TAG-="power-switch"

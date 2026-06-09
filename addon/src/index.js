@@ -4,13 +4,16 @@ import { resolveAllStreams } from './resolver.js';
 
 export const manifest = {
   id: 'dev.stremiolanremote.addon',
-  version: '0.3.0',
+  version: '0.5.0',
   name: 'LAN Remote',
   description: 'Cast playback to a Stremio LAN Remote desktop',
-  resources: ['stream'],
+  resources: ['stream', 'catalog', 'meta'],
   types: ['movie', 'series'],
-  catalogs: [],
-  idPrefixes: ['tt'],
+  catalogs: [
+    { type: 'movie', id: 'lan-remote-downloads', name: 'Deck Downloads — Movies' },
+    { type: 'series', id: 'lan-remote-downloads-series', name: 'Deck Downloads — Shows' },
+  ],
+  idPrefixes: ['tt', 'lan-dl:', 'lan-dl-series:'],
 };
 
 function encodeStreamToken(stream) {
@@ -31,35 +34,446 @@ function streamLabel(stream) {
   return `${quality}${seederTag} — ${filename}`.slice(0, 200);
 }
 
-function castEntryFor({ stream, type, id, publicHost }) {
+function publicBase(host) {
+  if (/^https?:\/\//i.test(host)) return host.replace(/\/+$/, '');
+  return `https://${host}`;
+}
+
+function queryFor(id, stream) {
   const isSeries = id.includes(':');
   const baseId = isSeries ? id.split(':')[0] : id;
-  const query = isSeries
+  return isSeries
     ? `id=${baseId}&season=${id.split(':')[1]}&episode=${id.split(':')[2]}&stream=${encodeStreamToken(stream)}`
     : `id=${baseId}&stream=${encodeStreamToken(stream)}`;
+}
+
+function castEntryFor({ stream, id, publicHost }) {
   return {
     name: `📺 Cast: ${streamLabel(stream)}`,
     title: 'Play on the Deck',
-    externalUrl: `http://${publicHost}/cast?${query}`,
+    externalUrl: `${publicBase(publicHost)}/cast?${queryFor(id, stream)}`,
+  };
+}
+
+function downloadEntryFor({ stream, id, publicHost }) {
+  return {
+    name: `⬇ Download: ${streamLabel(stream)}`,
+    title: 'Download to the Deck for later',
+    externalUrl: `${publicBase(publicHost)}/download_trigger_html?${queryFor(id, stream)}`,
+  };
+}
+
+function progressEntry({ entry, publicHost }) {
+  const pct = entry.total > 0 ? Math.round((entry.bytes / entry.total) * 100) : 0;
+  const fmt = (n) => {
+    let v = Number(n) || 0;
+    const u = ['B', 'KB', 'MB', 'GB', 'TB'];
+    let i = 0;
+    while (v >= 1024 && i < u.length - 1) { v /= 1024; i++; }
+    return v.toFixed(i ? 1 : 0) + ' ' + u[i];
+  };
+  const label = entry.total > 0
+    ? `${pct}% • ${fmt(entry.bytes)} / ${fmt(entry.total)}`
+    : `${fmt(entry.bytes)} downloaded so far`;
+  return {
+    name: `📥 ${label}`,
+    title: 'Live download progress (refresh to update)',
+    url: `${publicBase(publicHost)}/noop`,
+    behaviorHints: { notWebReady: true },
+  };
+}
+
+function prettyTitleFromFilename(filename) {
+  return String(filename).replace(/\.(mkv|mp4|webm|avi|mov)$/i, '').replace(/[._]/g, ' ');
+}
+
+async function fetchDownloads() {
+  try {
+    const r = await fetch(`http://${config.shellHost}/downloads`);
+    if (!r.ok) return [];
+    return await r.json();
+  } catch (e) {
+    return [];
+  }
+}
+
+function localStreamEntry({ entry, publicHost }) {
+  const localUrl = `file://${entry.path}`;
+  const token = encodeStreamToken({ url: localUrl, name: entry.filename });
+  return {
+    name: `📺 Cast: ${prettyTitleFromFilename(entry.filename)}`,
+    title: 'Play downloaded file on the Deck',
+    externalUrl: `${publicBase(publicHost)}/cast_local?stream=${token}&name=${encodeURIComponent(entry.filename)}`,
+  };
+}
+
+function deleteDownloadEntry({ filename, publicHost }) {
+  return {
+    name: `🗑 Delete download`,
+    title: 'Delete this downloaded file from the Deck',
+    url: `${publicBase(publicHost)}/delete_download?filename=${encodeURIComponent(filename)}`,
+    behaviorHints: { notWebReady: true },
+  };
+}
+
+function cancelDownloadEntry({ filename, publicHost }) {
+  return {
+    name: `✗ Cancel download`,
+    title: 'Cancel and remove the partial file from the Deck',
+    url: `${publicBase(publicHost)}/cancel_download?filename=${encodeURIComponent(filename)}`,
+    behaviorHints: { notWebReady: true },
+  };
+}
+
+function resumeDownloadEntry({ filename, publicHost }) {
+  return {
+    name: `↻ Resume download`,
+    title: 'Continue the interrupted download on the Deck',
+    url: `${publicBase(publicHost)}/resume_download?filename=${encodeURIComponent(filename)}`,
+    behaviorHints: { notWebReady: true },
   };
 }
 
 const builder = new addonBuilder(manifest);
 
 builder.defineStreamHandler(async ({ type, id }) => {
+  if (id.startsWith('lan-dl:')) {
+    const filename = decodeURIComponent(id.slice('lan-dl:'.length));
+    const list = await fetchDownloads();
+    const entry = list.find((d) => d.filename === filename);
+    if (!entry) return { streams: [] };
+    if (entry.status === 'done') {
+      return {
+        streams: [
+          localStreamEntry({ entry, publicHost: config.publicHost }),
+          deleteDownloadEntry({ filename, publicHost: config.publicHost }),
+        ],
+      };
+    }
+    if (entry.status === 'downloading') {
+      return {
+        streams: [
+          progressEntry({ entry, publicHost: config.publicHost }),
+          cancelDownloadEntry({ filename, publicHost: config.publicHost }),
+        ],
+      };
+    }
+    if (entry.status === 'interrupted') {
+      return {
+        streams: [deleteDownloadEntry({ filename, publicHost: config.publicHost })],
+      };
+    }
+    if (entry.status === 'unknown') {
+      return {
+        streams: [
+          { ...localStreamEntry({ entry, publicHost: config.publicHost }),
+            title: 'Play local file (completeness unknown)' },
+          deleteDownloadEntry({ filename, publicHost: config.publicHost }),
+        ],
+      };
+    }
+    return {
+      streams: [deleteDownloadEntry({ filename, publicHost: config.publicHost })],
+    };
+  }
+  const extras = [];
+  try {
+    const downloads = await fetchDownloads();
+    for (const entry of downloads.filter((d) => d.meta_id === id)) {
+      if (entry.status === 'done' || entry.status === 'unknown') {
+        extras.push(localStreamEntry({ entry, publicHost: config.publicHost }));
+        extras.push(deleteDownloadEntry({ filename: entry.filename, publicHost: config.publicHost }));
+      } else if (entry.status === 'downloading') {
+        extras.push(progressEntry({ entry, publicHost: config.publicHost }));
+        extras.push(cancelDownloadEntry({ filename: entry.filename, publicHost: config.publicHost }));
+      } else if (entry.status === 'interrupted') {
+        extras.push(deleteDownloadEntry({ filename: entry.filename, publicHost: config.publicHost }));
+      }
+    }
+  } catch (e) {}
+
   if (!config.streamResolverUrl) {
-    return { streams: [] };
+    return { streams: extras };
   }
   let streams;
   try {
     streams = await resolveAllStreams({ type, id, upstreamUrl: config.streamResolverUrl });
   } catch (e) {
-    return { streams: [] };
+    return { streams: extras };
   }
   const sorted = [...streams].sort((a, b) => seederCount(b) - seederCount(a));
+  const entries = [];
+  for (const s of sorted) {
+    entries.push(castEntryFor({ stream: s, id, publicHost: config.publicHost }));
+    if (s.infoHash) {
+      entries.push(downloadEntryFor({ stream: s, id, publicHost: config.publicHost }));
+    }
+  }
+  return { streams: [...extras, ...entries] };
+});
+
+function fmtBytes(n) {
+  if (!n) return '0 B';
+  let v = Number(n);
+  const u = ['B', 'KB', 'MB', 'GB', 'TB'];
+  let i = 0;
+  while (v >= 1024 && i < u.length - 1) { v /= 1024; i++; }
+  return v.toFixed(i ? 1 : 0) + ' ' + u[i];
+}
+
+const CINEMETA_CACHE = new Map();
+const CINEMETA_TTL_MS = 24 * 60 * 60 * 1000;
+
+async function cinemetaLookup(metaId, type = 'movie') {
+  if (!metaId) return null;
+  const key = `${type}:${metaId}`;
+  const cached = CINEMETA_CACHE.get(key);
+  if (cached && cached.at + CINEMETA_TTL_MS > Date.now()) return cached.meta;
+  try {
+    const r = await fetch(`https://v3-cinemeta.strem.io/meta/${type}/${metaId}.json`);
+    if (!r.ok) {
+      CINEMETA_CACHE.set(key, { meta: null, at: Date.now() });
+      return null;
+    }
+    const j = await r.json();
+    const meta = j?.meta || null;
+    CINEMETA_CACHE.set(key, { meta, at: Date.now() });
+    return meta;
+  } catch (e) {
+    return null;
+  }
+}
+
+function parseFilename(filename) {
+  let s = String(filename).replace(/\.(mkv|mp4|webm|avi|mov|m4v)$/i, '');
+  s = s.replace(/[._]/g, ' ').replace(/\s+/g, ' ').trim();
+  const yearMatch = s.match(/\b(19\d{2}|20\d{2})\b/);
+  const year = yearMatch ? yearMatch[0] : '';
+  let title = s;
+  if (yearMatch) {
+    title = s.slice(0, yearMatch.index).trim();
+  } else {
+    title = s
+      .split(/\s+(?=1080p|720p|2160p|480p|4K|BluRay|BDRip|WEBRip|WEB-DL|HEVC|x264|x265|REMUX|HDR|DV|DDP)/i)[0]
+      .trim();
+  }
+  return { title, year };
+}
+
+export async function cinemetaResolveByMetaId(metaId) {
+  if (!metaId) return null;
+  if (!metaId.includes(':')) {
+    return cinemetaLookup(metaId, 'movie');
+  }
+  const [id, season, episode] = metaId.split(':');
+  const series = await cinemetaLookup(id, 'series');
+  if (!series) return null;
+  const ep = (series.videos || []).find(
+    (v) => String(v.season) === String(season) && String(v.number ?? v.episode) === String(episode)
+  );
+  const epTitle = ep?.title || ep?.name || '';
+  const tag = `S${String(season).padStart(2, '0')}E${String(episode).padStart(2, '0')}`;
   return {
-    streams: sorted.map((s) => castEntryFor({ stream: s, type, id, publicHost: config.publicHost })),
+    ...series,
+    name: epTitle ? `${series.name} — ${tag} · ${epTitle}` : `${series.name} — ${tag}`,
+    description: ep?.overview || ep?.description || series.description,
+    poster: ep?.thumbnail || series.poster,
+    releaseInfo: ep?.released ? String(new Date(ep.released).getUTCFullYear()) : series.releaseInfo,
   };
+}
+
+async function cinemetaSearchByFilename(filename) {
+  const key = `filename:${filename}`;
+  const cached = CINEMETA_CACHE.get(key);
+  if (cached && cached.at + CINEMETA_TTL_MS > Date.now()) return cached.meta;
+  const { title, year } = parseFilename(filename);
+  if (!title) {
+    CINEMETA_CACHE.set(key, { meta: null, at: Date.now() });
+    return null;
+  }
+  try {
+    const r = await fetch(
+      `https://v3-cinemeta.strem.io/catalog/movie/top/search=${encodeURIComponent(title)}.json`
+    );
+    if (!r.ok) {
+      CINEMETA_CACHE.set(key, { meta: null, at: Date.now() });
+      return null;
+    }
+    const j = await r.json();
+    const metas = j?.metas || [];
+    let match = null;
+    if (year) {
+      match = metas.find((m) => String(m.releaseInfo || '').startsWith(year));
+    }
+    if (!match) match = metas[0] || null;
+    const full = match?.id ? await cinemetaLookup(match.id) : null;
+    CINEMETA_CACHE.set(key, { meta: full, at: Date.now() });
+    return full;
+  } catch (e) {
+    return null;
+  }
+}
+
+function isSeriesEntry(d) {
+  return typeof d.meta_id === 'string' && d.meta_id.includes(':');
+}
+
+function seriesBaseId(d) {
+  return d.meta_id.split(':')[0];
+}
+
+function statusSuffix(d) {
+  if (d.status === 'downloading') {
+    const pct = d.total > 0 ? Math.round((d.bytes / d.total) * 100) : 0;
+    return ` [Downloading ${pct}%]`;
+  }
+  if (d.status !== 'done') return ` [${d.status}]`;
+  return '';
+}
+
+builder.defineCatalogHandler(async ({ type, id }) => {
+  const list = await fetchDownloads();
+  const order = (s) => (s === 'downloading' ? 0 : s === 'done' ? 1 : 2);
+
+  if (id === 'lan-remote-downloads') {
+    const movies = list.filter((d) => !isSeriesEntry(d));
+    const sorted = [...movies].sort((a, b) => order(a.status) - order(b.status));
+    const metas = await Promise.all(
+      sorted.map(async (d) => {
+        const suffix = statusSuffix(d);
+        let cm = d.meta_id ? await cinemetaResolveByMetaId(d.meta_id) : null;
+        if (!cm) cm = await cinemetaSearchByFilename(d.filename);
+        const baseName = cm?.name || prettyTitleFromFilename(d.filename);
+        const displayName = d.status === 'done' ? baseName : baseName + suffix;
+        const description =
+          d.status === 'done'
+            ? cm?.description || `Downloaded to ${d.path}`
+            : `${fmtBytes(d.bytes)} / ${fmtBytes(d.total)} — ${d.status}`;
+        const meta = {
+          id: `lan-dl:${encodeURIComponent(d.filename)}`,
+          type: 'movie',
+          name: displayName,
+          description,
+          releaseInfo: cm?.releaseInfo || '',
+        };
+        if (cm?.poster) {
+          meta.poster = cm.poster;
+          meta.posterShape = cm.posterShape || 'poster';
+        }
+        if (cm?.background) meta.background = cm.background;
+        if (cm?.logo) meta.logo = cm.logo;
+        if (cm?.genres) meta.genres = cm.genres;
+        return meta;
+      })
+    );
+    return { metas, cacheMaxAge: 0, staleRevalidate: 0, staleError: 0 };
+  }
+
+  if (id === 'lan-remote-downloads-series') {
+    const episodes = list.filter((d) => isSeriesEntry(d));
+    const bySeries = new Map();
+    for (const ep of episodes) {
+      const seriesId = seriesBaseId(ep);
+      if (!bySeries.has(seriesId)) bySeries.set(seriesId, []);
+      bySeries.get(seriesId).push(ep);
+    }
+    const metas = await Promise.all(
+      [...bySeries.entries()].map(async ([seriesId, eps]) => {
+        const series = await cinemetaLookup(seriesId, 'series');
+        const downloadingCount = eps.filter((e) => e.status === 'downloading').length;
+        const doneCount = eps.filter((e) => e.status === 'done').length;
+        const baseName = series?.name || seriesId;
+        const summary =
+          downloadingCount > 0
+            ? `${doneCount} done · ${downloadingCount} downloading`
+            : `${doneCount} episode${doneCount === 1 ? '' : 's'} downloaded`;
+        const meta = {
+          id: `lan-dl-series:${seriesId}`,
+          type: 'series',
+          name: baseName,
+          description: summary,
+          releaseInfo: series?.releaseInfo || '',
+        };
+        if (series?.poster) {
+          meta.poster = series.poster;
+          meta.posterShape = series.posterShape || 'poster';
+        }
+        if (series?.background) meta.background = series.background;
+        if (series?.logo) meta.logo = series.logo;
+        if (series?.genres) meta.genres = series.genres;
+        return meta;
+      })
+    );
+    return { metas, cacheMaxAge: 0, staleRevalidate: 0, staleError: 0 };
+  }
+
+  return { metas: [] };
+});
+
+builder.defineMetaHandler(async ({ type, id }) => {
+  if (id.startsWith('lan-dl-series:')) {
+    const seriesId = id.slice('lan-dl-series:'.length);
+    const series = await cinemetaLookup(seriesId, 'series');
+    if (!series) return { meta: null };
+    const list = await fetchDownloads();
+    const downloaded = list.filter(
+      (d) => typeof d.meta_id === 'string' && d.meta_id.startsWith(`${seriesId}:`)
+    );
+    const downloadedKeys = new Set(downloaded.map((d) => d.meta_id));
+    const videos = (series.videos || [])
+      .filter((v) => downloadedKeys.has(v.id))
+      .map((v) => {
+        const dl = downloaded.find((d) => d.meta_id === v.id);
+        const suffix = dl ? statusSuffix(dl) : '';
+        return {
+          id: v.id,
+          title: (v.title || `S${v.season}E${v.number}`) + suffix,
+          season: v.season,
+          episode: v.number ?? v.episode,
+          released: v.released,
+          overview: v.overview,
+          thumbnail: v.thumbnail,
+        };
+      });
+    return {
+      meta: {
+        id,
+        type: 'series',
+        name: series.name,
+        description: series.description,
+        poster: series.poster,
+        background: series.background,
+        logo: series.logo,
+        genres: series.genres,
+        releaseInfo: series.releaseInfo,
+        cast: series.cast,
+        director: series.director,
+        runtime: series.runtime,
+        videos,
+      },
+    };
+  }
+  if (!id.startsWith('lan-dl:')) return { meta: null };
+  const filename = decodeURIComponent(id.slice('lan-dl:'.length));
+  const list = await fetchDownloads();
+  const entry = list.find((d) => d.filename === filename);
+  let cm = entry?.meta_id ? await cinemetaResolveByMetaId(entry.meta_id) : null;
+  if (!cm && entry) cm = await cinemetaSearchByFilename(filename);
+  const meta = {
+    id,
+    type: 'movie',
+    name: cm?.name || prettyTitleFromFilename(filename),
+    description: cm?.description || (entry ? `Downloaded to ${entry.path}` : 'Local file'),
+  };
+  if (cm?.poster) { meta.poster = cm.poster; meta.posterShape = cm.posterShape || 'poster'; }
+  if (cm?.background) meta.background = cm.background;
+  if (cm?.logo) meta.logo = cm.logo;
+  if (cm?.genres) meta.genres = cm.genres;
+  if (cm?.releaseInfo) meta.releaseInfo = cm.releaseInfo;
+  if (cm?.cast) meta.cast = cm.cast;
+  if (cm?.director) meta.director = cm.director;
+  if (cm?.runtime) meta.runtime = cm.runtime;
+  return { meta };
 });
 
 export const addonInterface = builder.getInterface();

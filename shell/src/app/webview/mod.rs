@@ -83,6 +83,19 @@ impl WebView {
             });
     }
 
+    pub fn connect_lan_remote_log(&self) {
+        let widget = self.imp();
+        if let Some(user_content_manager) = widget.webview.user_content_manager() {
+            user_content_manager.register_script_message_handler("lan_remote_log", None);
+            user_content_manager.connect_script_message_received(
+                Some("lan_remote_log"),
+                |_, value| {
+                    tracing::info!(target: "lan_remote", "DISPATCH {}", value.to_string());
+                },
+            );
+        }
+    }
+
     pub fn exec_js(&self, script: &str) {
         let widget = self.imp();
 
@@ -131,6 +144,31 @@ impl WebView {
             callback(false);
             true
         });
+    }
+
+    pub fn reload(&self) {
+        self.imp().webview.reload();
+    }
+
+    pub fn connect_web_process_terminated<T: Fn() + 'static>(&self, callback: T) {
+        let widget = self.imp();
+        widget.webview.connect_web_process_terminated(move |_, reason| {
+            tracing::warn!(target: "lan_remote", "web process terminated: {:?}", reason);
+            callback();
+        });
+    }
+
+    pub fn connect_heartbeat<T: Fn() + 'static>(&self, callback: T) {
+        let widget = self.imp();
+        if let Some(user_content_manager) = widget.webview.user_content_manager() {
+            user_content_manager.register_script_message_handler("lan_remote_heartbeat", None);
+            user_content_manager.connect_script_message_received(
+                Some("lan_remote_heartbeat"),
+                move |_, _value| {
+                    callback();
+                },
+            );
+        }
     }
 
     pub fn connect_open_external<T: Fn(String) + 'static>(&self, callback: T) {
