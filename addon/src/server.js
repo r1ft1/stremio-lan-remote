@@ -13,6 +13,8 @@ import {
 } from './dispatchEncoder.js';
 import { resolveBestStream } from './resolver.js';
 import { config } from './config.js';
+import { startDownload, cancelDownload, deleteDownload, getDownloads } from './downloader.js';
+import { addSub, removeSub } from './subscriptions.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PLACEHOLDER = readFileSync(resolve(__dirname, '../assets/casting.mp4'));
@@ -334,11 +336,7 @@ export function createServer({
       const meta_id = season != null && episode != null
         ? `${String(id || '').split(':')[0]}:${season}:${episode}`
         : String(id || '').split(':')[0];
-      await fetchFn(`http://${shellHost}/download`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ url: sourceUrl, filename, meta_id }),
-      }).catch(() => {});
+      startDownload({ url: sourceUrl, filename, meta_id, dir: config.downloadDir });
       res.set('Content-Type', 'text/html; charset=utf-8');
       res.send(
         '<!doctype html><meta charset="utf-8">' +
@@ -386,13 +384,8 @@ export function createServer({
     } catch (e) { res.status(502).end(); }
   });
 
-  app.get('/downloads', async (_req, res) => {
-    try {
-      const r = await fetchFn(`http://${shellHost}/downloads`);
-      if (!r.ok) return res.status(r.status).end();
-      const j = await r.json();
-      res.json(j);
-    } catch (e) { res.status(502).end(); }
+  app.get('/downloads', (_req, res) => {
+    res.json(getDownloads());
   });
 
   app.get('/cast_local', async (req, res) => {
@@ -414,36 +407,20 @@ export function createServer({
     }
   });
 
-  app.get('/cancel_download', async (req, res) => {
-    try {
-      const filename = String(req.query.filename || '');
-      if (!filename) return res.status(400).send('missing filename');
-      await fetchFn(`http://${shellHost}/cancel_download`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ filename }),
-      }).catch(() => {});
-      res.set('Content-Type', 'video/mp4');
-      res.send(CONTROL_TINY);
-    } catch (e) {
-      res.status(502).send(e.message);
-    }
+  app.get('/cancel_download', (req, res) => {
+    const filename = String(req.query.filename || '');
+    if (!filename) return res.status(400).send('missing filename');
+    cancelDownload(filename);
+    res.set('Content-Type', 'video/mp4');
+    res.send(CONTROL_TINY);
   });
 
   app.get('/delete_download', async (req, res) => {
-    try {
-      const filename = String(req.query.filename || '');
-      if (!filename) return res.status(400).send('missing filename');
-      await fetchFn(`http://${shellHost}/delete_download`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ filename }),
-      }).catch(() => {});
-      res.set('Content-Type', 'video/mp4');
-      res.send(CONTROL_TINY);
-    } catch (e) {
-      res.status(502).send(e.message);
-    }
+    const filename = String(req.query.filename || '');
+    if (!filename) return res.status(400).send('missing filename');
+    await deleteDownload(filename);
+    res.set('Content-Type', 'video/mp4');
+    res.send(CONTROL_TINY);
   });
 
   app.get('/download_trigger', async (req, res) => {
@@ -465,11 +442,7 @@ export function createServer({
       const meta_id = season != null && episode != null
         ? `${String(id || '').split(':')[0]}:${season}:${episode}`
         : String(id || '').split(':')[0];
-      await fetchFn(`http://${shellHost}/download`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ url: sourceUrl, filename, meta_id }),
-      }).catch(() => {});
+      startDownload({ url: sourceUrl, filename, meta_id, dir: config.downloadDir });
       res.set('Content-Type', 'video/mp4');
       res.send(CONTROL_TINY);
     } catch (e) {
@@ -481,16 +454,12 @@ export function createServer({
     try {
       const filename = String(req.query.filename || '');
       if (!filename) return res.status(400).send('missing filename');
-      const dl = await fetchFn(`http://${shellHost}/downloads`).then((r) => r.json()).catch(() => []);
+      const dl = getDownloads();
       const entry = (Array.isArray(dl) ? dl : []).find((d) => d.filename === filename);
       if (!entry || !entry.source_url) {
         return res.status(404).send('no resumable source URL');
       }
-      await fetchFn(`http://${shellHost}/download`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ url: entry.source_url, filename, meta_id: entry.meta_id || '' }),
-      }).catch(() => {});
+      startDownload({ url: entry.source_url, filename, meta_id: entry.meta_id || '', dir: config.downloadDir });
       res.set('Content-Type', 'video/mp4');
       res.send(CONTROL_TINY);
     } catch (e) {
@@ -498,18 +467,35 @@ export function createServer({
     }
   });
 
-  app.post('/download', async (req, res) => {
-    try {
-      const url = String(req.body?.url || '');
-      const filename = String(req.body?.filename || '');
-      if (!url || !filename) return res.status(400).end();
-      const r = await fetchFn(`http://${shellHost}/download`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ url, filename }),
-      });
-      res.status(r.ok ? 200 : r.status).end();
-    } catch (e) { res.status(502).end(); }
+  app.post('/download', (req, res) => {
+    const url = String(req.body?.url || '');
+    const filename = String(req.body?.filename || '');
+    const meta_id = String(req.body?.meta_id || '');
+    if (!url || !filename) return res.status(400).end();
+    const ok = startDownload({ url, filename, meta_id, dir: config.downloadDir });
+    res.status(ok ? 202 : 409).end();
+  });
+
+  function bounceHtml(msg) {
+    return '<!doctype html><meta charset="utf-8"><title>Subscriptions</title>' +
+      '<style>body{background:#0f0f12;color:#eaeaf2;font-family:-apple-system,sans-serif;display:flex;align-items:center;justify-content:center;height:100vh;margin:0;padding:0 20px;text-align:center}</style>' +
+      `<div><p>${msg}</p></div><script>setTimeout(function(){location.href="stremio:///"},400)</script>`;
+  }
+
+  app.get('/subscribe', async (req, res) => {
+    const id = String(req.query.id || '').split(':')[0];
+    if (!id) return res.status(400).send('missing id');
+    await addSub(config.downloadDir, id, new Date().toISOString());
+    res.set('Content-Type', 'text/html; charset=utf-8');
+    res.send(bounceHtml('🔔 Subscribed — new 1080p episodes will auto-download.'));
+  });
+
+  app.get('/unsubscribe', async (req, res) => {
+    const id = String(req.query.id || '').split(':')[0];
+    if (!id) return res.status(400).send('missing id');
+    await removeSub(config.downloadDir, id);
+    res.set('Content-Type', 'text/html; charset=utf-8');
+    res.send(bounceHtml('🔕 Unsubscribed.'));
   });
 
   app.get('/control', async (req, res) => {

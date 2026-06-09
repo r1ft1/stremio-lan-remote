@@ -1,6 +1,8 @@
 import { addonBuilder } from 'stremio-addon-sdk';
 import { config } from './config.js';
 import { resolveAllStreams } from './resolver.js';
+import { getDownloads } from './downloader.js';
+import { isSubscribed } from './subscriptions.js';
 
 export const manifest = {
   id: 'dev.stremiolanremote.addon',
@@ -88,13 +90,7 @@ function prettyTitleFromFilename(filename) {
 }
 
 async function fetchDownloads() {
-  try {
-    const r = await fetch(`http://${config.shellHost}/downloads`);
-    if (!r.ok) return [];
-    return await r.json();
-  } catch (e) {
-    return [];
-  }
+  return getDownloads();
 }
 
 function localStreamEntry({ entry, publicHost }) {
@@ -132,6 +128,22 @@ function resumeDownloadEntry({ filename, publicHost }) {
     url: `${publicBase(publicHost)}/resume_download?filename=${encodeURIComponent(filename)}`,
     behaviorHints: { notWebReady: true },
   };
+}
+
+async function subscriptionEntry({ id, publicHost }) {
+  const seriesId = String(id).split(':')[0];
+  const subscribed = await isSubscribed(config.downloadDir, seriesId);
+  return subscribed
+    ? {
+        name: '🔕 Unsubscribe',
+        title: 'Stop auto-downloading new episodes',
+        externalUrl: `${publicBase(publicHost)}/unsubscribe?id=${seriesId}`,
+      }
+    : {
+        name: '🔔 Subscribe — auto-download new 1080p',
+        title: 'Automatically download newly-aired episodes to the Deck',
+        externalUrl: `${publicBase(publicHost)}/subscribe?id=${seriesId}`,
+      };
 }
 
 const builder = new addonBuilder(manifest);
@@ -191,6 +203,12 @@ builder.defineStreamHandler(async ({ type, id }) => {
       }
     }
   } catch (e) {}
+
+  if (type === 'series' && id.includes(':')) {
+    try {
+      extras.unshift(await subscriptionEntry({ id, publicHost: config.publicHost }));
+    } catch (e) {}
+  }
 
   if (!config.streamResolverUrl) {
     return { streams: extras };

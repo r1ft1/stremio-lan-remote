@@ -26,20 +26,9 @@ echo "XAUTHORITY=${XAUTHORITY:-} XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR:-}"
 
 # --- Cleanup ----------------------------------------------------------------
 pkill -9 -f 'stremio-linux-shell' 2>/dev/null || true
-pkill -9 -f 'shell/data/server.js' 2>/dev/null || true
 pkill -f 'addon/bin/start.js' 2>/dev/null || true
 # Stock Stremio Flatpak holds port 11470 — kill it if present.
 pkill -9 -f 'stremio-runtime' 2>/dev/null || true
-sleep 1
-
-# Free port 11470 / 12470 of any leftover node process.
-for port in 11470 12470; do
-  pids=$(ss -tlnpH "sport = :$port" 2>/dev/null | grep -oE 'pid=[0-9]+' | cut -d= -f2 | sort -u)
-  if [[ -n "$pids" ]]; then
-    echo "freeing port $port from pids: $pids"
-    kill -9 $pids 2>/dev/null || true
-  fi
-done
 sleep 1
 
 # --- Env discovery ----------------------------------------------------------
@@ -87,7 +76,6 @@ distrobox-enter stremio-build -- bash -c "
   XAUTHORITY='${XAUTHORITY:-}' \
   XDG_RUNTIME_DIR='$XDG_RUNTIME_DIR' \
   XDG_SESSION_TYPE='${XDG_SESSION_TYPE:-}' \
-  SERVER_PATH='$SERVER_JS' \
   RUST_LOG=info,lan_remote=info,server=info \
   exec '$SHELL_BIN' >> '$SHELL_LOG' 2>&1
 "

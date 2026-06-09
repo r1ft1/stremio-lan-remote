@@ -104,3 +104,33 @@ describe('manifest served by Express server', () => {
     expect(res.body.resources).toContain('stream');
   });
 });
+
+import { _setStateForTest } from '../src/downloader.js';
+
+describe('addon-owned downloads', () => {
+  it('/downloads returns the local downloader list', async () => {
+    _setStateForTest('/tmp', [{ filename: 'a.mkv', status: 'done', meta_id: 'tt1:1:1' }]);
+    const app = createServer({ fetch: vi.fn(), shellHost: '127.0.0.1:7001' });
+    const res = await request(app).get('/downloads');
+    expect(res.status).toBe(200);
+    expect(res.body[0].filename).toBe('a.mkv');
+  });
+});
+
+import { loadSubs } from '../src/subscriptions.js';
+import { config } from '../src/config.js';
+import { mkdtemp } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+
+describe('subscribe endpoints', () => {
+  it('subscribe then unsubscribe updates the store', async () => {
+    config.downloadDir = await mkdtemp(join(tmpdir(), 'subep-'));
+    const app = createServer({ fetch: vi.fn(), shellHost: '127.0.0.1:7001' });
+    const r1 = await request(app).get('/subscribe?id=tt0903747');
+    expect(r1.status).toBe(200);
+    expect((await loadSubs(config.downloadDir)).map((s) => s.seriesId)).toContain('tt0903747');
+    await request(app).get('/unsubscribe?id=tt0903747');
+    expect((await loadSubs(config.downloadDir))).toHaveLength(0);
+  });
+});
