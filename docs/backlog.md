@@ -48,6 +48,23 @@ Future work intentionally deferred from v1. Items here are not bugs in the v1 de
 
 ---
 
+## Wake the Deck from the phone
+
+**Problem.** The mobile controller can Suspend the Deck (`POST /suspend` → `loginctl suspend`), but can't wake it again — when suspended, both Stremio and our addon are frozen, so nothing on the Deck is listening. Today the user has to reach for the power button or press a Bluetooth controller key.
+
+**Why it's tricky.** Wake-on-LAN needs a magic packet on L2 of the same physical LAN. Tailscale Funnel is L7-only, so the phone can't WoL across the internet directly. Wi-Fi WoLAN on the Deck is unreliable; Ethernet WoL via the dock works but doesn't help if the dock isn't connected.
+
+**Options for a v2 implementation:**
+1. **WoL companion service** — a small always-on host on the same LAN as the Deck (Raspberry Pi, OpenWRT router with a cron'd script, NAS, spare laptop) runs an HTTPS endpoint that, on a token-authenticated request, sends a WoL magic packet to the Deck's MAC. The mobile controller calls it before issuing playback commands. ~30 LOC of Node/Go.
+2. **Tailscale WoL** — `tailscale wol steamdeck` works from any other tailnet device on the Deck's physical LAN. Document this for users who already have a tailnet host on the same LAN; no new code needed, but it's a manual command and the mobile Tailscale app doesn't expose a UI for it.
+3. **Don't suspend, just blank display** — bypass the wake problem by replacing `/suspend` with a "screen off + idle mpv pause" mode that keeps the addon/shell processes running. Pros: instant resume. Cons: ~5W idle draw, hot Deck, doesn't help with the user's original "save battery" intent.
+
+**Recommended for v2:** option 1 as a first-class feature, option 3 as a separate "Sleep display" controller button.
+
+**Out of scope here:** suspend-to-disk wake; suspending while a download is mid-flight (already partially handled — `loginctl suspend` lets in-progress downloads pause; verify on resume that range-resume picks up correctly).
+
+---
+
 ## Other deferred items (placeholders)
 
 - HTTPS / TLS for the LAN listener (matters if pairing tokens become long-lived)

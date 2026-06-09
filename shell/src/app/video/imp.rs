@@ -50,6 +50,7 @@ impl Default for Video {
             init.set_property("video-timing-offset", "0")?;
             init.set_property("terminal", "yes")?;
             init.set_property("msg-level", msg_level)?;
+            init.set_property("volume-max", 200)?;
             Ok(())
         })
         .expect("Failed to create mpv");

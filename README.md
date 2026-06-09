@@ -8,6 +8,8 @@ Phone user opens a movie or episode in Stremio mobile, taps the "📺 Cast to De
 
 Also supports background downloads to the Deck with resume-on-restart, a "Deck Downloads" catalog, full playback control (pause / seek / volume / fullscreen / audio + subtitle track selection) from a mobile web controller, and cancel / delete inside Stremio mobile.
 
+The mobile controller also exposes **Exit Stremio** and **Suspend Deck** buttons (both behind a confirmation prompt). When playback starts and headphones are detected on the Deck (3.5mm jack, USB headset, or Bluetooth), the initial volume is automatically set to 50%. The volume cap was raised from mpv's default 130% to 200%.
+
 ## Install on Stremio mobile (Android, iOS, or web)
 
 The addon is currently hosted at:

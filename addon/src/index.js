@@ -278,7 +278,7 @@ function parseFilename(filename) {
   return { title, year };
 }
 
-async function cinemetaResolveByMetaId(metaId) {
+export async function cinemetaResolveByMetaId(metaId) {
   if (!metaId) return null;
   if (!metaId.includes(':')) {
     return cinemetaLookup(metaId, 'movie');
@@ -438,10 +438,12 @@ builder.defineMetaHandler(async ({ type, id }) => {
       (d) => typeof d.meta_id === 'string' && d.meta_id.startsWith(`${seriesId}:`)
     );
     const downloadedKeys = new Set(downloaded.map((d) => d.meta_id));
+    const keyFor = (v) => `${seriesId}:${v.season}:${v.number ?? v.episode}`;
     const videos = (series.videos || [])
-      .filter((v) => downloadedKeys.has(v.id))
+      .filter((v) => downloadedKeys.has(v.id) || downloadedKeys.has(keyFor(v)))
       .map((v) => {
-        const dl = downloaded.find((d) => d.meta_id === v.id);
+        const k = downloadedKeys.has(v.id) ? v.id : keyFor(v);
+        const dl = downloaded.find((d) => d.meta_id === k);
         const suffix = dl ? statusSuffix(dl) : '';
         return {
           id: v.id,

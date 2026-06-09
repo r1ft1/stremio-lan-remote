@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { dirname, resolve } from 'node:path';
 import sdk from 'stremio-addon-sdk';
 const { getRouter } = sdk;
-import { addonInterface } from './index.js';
+import { addonInterface, cinemetaResolveByMetaId } from './index.js';
 import {
   encodePlayerLoad,
   encodePlayerPausedChanged,
@@ -118,11 +118,19 @@ function controllerHtml(title, metaDeepLink) {
     <label for="sid">Subtitles</label>
     <select id="sid"></select>
   </div>
+  <div class="picker">
+    <label for="sid2">Secondary subtitles</label>
+    <select id="sid2"></select>
+  </div>
   <div class="row one">
     <button data-action="fullscreen" id="btn-fs">⛶ Fullscreen</button>
   </div>
   <div class="row one"><a class="pick-link" href="${safeDeepLink}">↻ Pick a different stream</a></div>
   <div class="row one"><button class="danger" data-action="stop">⏹ Stop Deck playback</button></div>
+  <div class="row">
+    <button data-action="quit" data-confirm="Exit Stremio on the Deck?">⏏ Exit Stremio</button>
+    <button class="danger" data-action="suspend" data-confirm="Suspend the Deck now?">⏻ Suspend Deck</button>
+  </div>
   <div class="status" id="status"></div>
 </main>
 <script>
@@ -132,6 +140,7 @@ function controllerHtml(title, metaDeepLink) {
   const tDur = document.getElementById('t-dur');
   const aidSel = document.getElementById('aid');
   const sidSel = document.getElementById('sid');
+  const sid2Sel = document.getElementById('sid2');
   const buffer = document.getElementById('buffer');
   const bufferPct = document.getElementById('buffer-pct');
   const volFill = document.getElementById('vol-fill');
@@ -157,11 +166,15 @@ function controllerHtml(title, metaDeepLink) {
   document.querySelectorAll('button[data-action]').forEach((b) => {
     b.addEventListener('click', async () => {
       const action = b.dataset.action;
+      const confirmMsg = b.dataset.confirm;
+      if (confirmMsg && !window.confirm(confirmMsg)) return;
       try {
         const r = await fetch('/control?action=' + encodeURIComponent(action), { method: 'POST' });
         if (!r.ok) flash('Failed: ' + r.status, 'err');
-        else if (action === 'stop') {
+        else if (action === 'stop' || action === 'quit') {
           setTimeout(() => { window.location.href = 'stremio:///'; }, 200);
+        } else if (action === 'suspend') {
+          flash('Deck suspending…', 'ok');
         }
       } catch (e) { flash('Network error', 'err'); }
     });
@@ -180,7 +193,24 @@ function controllerHtml(title, metaDeepLink) {
   });
   sidSel.addEventListener('change', async () => {
     await fetch('/set_track', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ kind:'sid', id: sidSel.value }) });
+    rebuildSecondarySubs();
   });
+  sid2Sel.addEventListener('change', async () => {
+    await fetch('/set_track', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ kind:'secondary-sid', id: sid2Sel.value }) });
+  });
+  let lastSubTracks = [];
+  function rebuildSecondarySubs() {
+    const primary = sidSel.value;
+    const filtered = lastSubTracks.filter((t) => String(t.id) !== String(primary));
+    const prev = sid2Sel.value;
+    rebuildSelect(sid2Sel, filtered, true);
+    if (prev && prev !== 'no' && filtered.some((t) => String(t.id) === prev)) {
+      sid2Sel.value = prev;
+    } else if (prev && prev !== 'no') {
+      sid2Sel.value = 'no';
+      fetch('/set_track', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ kind:'secondary-sid', id: 'no' }) }).catch(() => {});
+    }
+  }
   function trackLabel(t) {
     const parts = [];
     if (t.lang) parts.push(t.lang);
@@ -223,12 +253,20 @@ function controllerHtml(title, metaDeepLink) {
       if (newSig !== lastSig) {
         lastSig = newSig;
         rebuildSelect(aidSel, list.filter(t => t.type === 'audio'), false);
-        rebuildSelect(sidSel, list.filter(t => t.type === 'sub'), true);
+        lastSubTracks = list.filter(t => t.type === 'sub');
+        rebuildSelect(sidSel, lastSubTracks, true);
+        rebuildSecondarySubs();
       }
       if (s.aid != null && s.aid !== false) aidSel.value = String(s.aid);
-      if (s.sid != null && s.sid !== false) sidSel.value = String(s.sid);
-      const vol = Math.max(0, Math.min(150, Number(s.volume) || 0));
-      volFill.style.width = Math.min(100, (vol / 100) * 100) + '%';
+      if (s.sid != null && s.sid !== false) {
+        const before = sidSel.value;
+        sidSel.value = String(s.sid);
+        if (before !== sidSel.value) rebuildSecondarySubs();
+      }
+      if (s.secondary_sid != null && s.secondary_sid !== false) sid2Sel.value = String(s.secondary_sid);
+      else if (s.secondary_sid === false) sid2Sel.value = 'no';
+      const vol = Math.max(0, Math.min(200, Number(s.volume) || 0));
+      volFill.style.width = Math.min(100, (vol / 200) * 100) + '%';
       volNum.textContent = Math.round(vol) + '%';
       if (s.fullscreen) btnFs.classList.add('active'); else btnFs.classList.remove('active');
       btnFs.textContent = s.fullscreen ? '⛶ Exit Fullscreen' : '⛶ Fullscreen';
@@ -276,6 +314,8 @@ export function createServer({
     'vol-up': { path: '/volume', body: { delta: 5 } },
     'vol-down': { path: '/volume', body: { delta: -5 } },
     fullscreen: { path: '/fullscreen' },
+    quit: { path: '/quit' },
+    suspend: { path: '/suspend' },
   };
 
   async function dispatchControl(action) {
@@ -365,7 +405,7 @@ export function createServer({
     try {
       const kind = String(req.body?.kind || '');
       const id = String(req.body?.id ?? '');
-      if (!['aid', 'sid', 'vid'].includes(kind)) return res.status(400).end();
+      if (!['aid', 'sid', 'vid', 'secondary-sid'].includes(kind)) return res.status(400).end();
       const r = await fetchFn(`http://${shellHost}/set_track`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -394,12 +434,12 @@ export function createServer({
       if (!streamToken) return res.status(400).send('missing stream');
       const stream = JSON.parse(Buffer.from(streamToken, 'base64url').toString('utf8'));
       if (!stream.url) return res.status(400).send('stream has no url');
+      const title = String(req.query.name || stream.name || 'Local file');
       await fetchFn(`http://${shellHost}/play_url`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ url: stream.url }),
+        body: JSON.stringify({ url: stream.url, title }),
       });
-      const title = String(req.query.name || stream.name || 'Local file');
       res.set('Content-Type', 'text/html; charset=utf-8');
       res.send(controllerHtml(title, 'stremio:///'));
     } catch (e) {
@@ -505,6 +545,28 @@ export function createServer({
     res.send(CONTROL_TINY);
   });
 
+  app.get('/remote', async (_req, res) => {
+    try {
+      const stateResp = await fetchFn(`http://${shellHost}/state`).catch(() => null);
+      let title = 'Deck Remote';
+      if (stateResp && stateResp.ok) {
+        const s = await stateResp.json().catch(() => null);
+        if (s?.now_title) {
+          title = s.now_title;
+        } else if (s && Array.isArray(s.track_list)) {
+          const v = s.track_list.find((t) => t && t.type === 'video' && t.selected);
+          if (v && v['demux-w'] && v['demux-h']) {
+            title = `Now playing — ${v['demux-w']}×${v['demux-h']}`;
+          }
+        }
+      }
+      res.set('Content-Type', 'text/html; charset=utf-8');
+      res.send(controllerHtml(title, 'stremio:///'));
+    } catch (e) {
+      res.status(502).send(e.message);
+    }
+  });
+
   app.get('/cast', async (req, res) => {
     try {
       const { id, season, episode, stream: streamToken } = req.query;
@@ -540,6 +602,13 @@ export function createServer({
       const isValidInfoHash = (h) => typeof h === 'string' && /^[0-9a-f]{40}$/i.test(h);
       const dryRun = req.query.dry_run === '1';
 
+      const filenameTitle = stream?.title?.split('\n')[0] || stream?.name?.replace(/\n/g, ' ') || 'Stream';
+      let nowTitle = filenameTitle;
+      try {
+        const cm = await cinemetaResolveByMetaId(isSeries ? `${id}:${season}:${episode}` : id);
+        if (cm?.name) nowTitle = cm.name;
+      } catch (e) {}
+
       if (!dryRun) {
         if (stream.infoHash) {
           if (!isValidInfoHash(stream.infoHash)) {
@@ -549,13 +618,13 @@ export function createServer({
           await fetchFn(`http://${shellHost}/play_url`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ url: streamUrl }),
+            body: JSON.stringify({ url: streamUrl, title: nowTitle }),
           }).catch(() => {});
         } else if (stream.url) {
           await fetchFn(`http://${shellHost}/play_url`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ url: stream.url }),
+            body: JSON.stringify({ url: stream.url, title: nowTitle }),
           }).catch(() => {});
         }
       }
@@ -564,7 +633,7 @@ export function createServer({
         res.set('Content-Type', 'video/mp4');
         return res.send(PLACEHOLDER);
       }
-      const title = stream?.title?.split('\n')[0] || stream?.name?.replace(/\n/g, ' ') || 'Stream';
+      const title = filenameTitle;
       const metaDeepLink = isSeries
         ? `stremio:///detail/series/${id}/${videoId}`
         : `stremio:///detail/movie/${id}`;
