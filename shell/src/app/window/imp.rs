@@ -67,9 +67,10 @@ impl Window {
                 {
                     let mut flags = BitFlags::empty();
                     flags.insert(InhibitFlags::Idle);
+                    flags.insert(InhibitFlags::Suspend);
 
                     let options = InhibitOptions::default()
-                        .set_reason("Prevent screen from going blank during media playback");
+                        .set_reason("Prevent screen blank and suspend during playback");
 
                     let mut inhibit_request = inhibit_request.lock().await;
                     *inhibit_request = proxy

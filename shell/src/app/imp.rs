@@ -133,7 +133,7 @@ impl ApplicationImpl for Application {
             );
         }
 
-        for prop in ["time-pos", "duration", "pause", "track-list", "aid", "sid", "paused-for-cache", "cache-buffering-state", "volume"] {
+        for prop in ["time-pos", "duration", "pause", "track-list", "aid", "sid", "secondary-sid", "paused-for-cache", "cache-buffering-state", "volume"] {
             video.observe_mpv_property(prop.to_string());
         }
 
@@ -149,6 +149,7 @@ impl ApplicationImpl for Application {
         let lan_state_for_server = lan_state.clone();
         let lan_downloads_for_server = lan_downloads.clone();
         let download_dir_for_server = download_dir.clone();
+        let lan_tx_for_playback = lan_tx.clone();
         tokio::spawn(async move {
             if let Err(e) = lan_remote::serve(lan_addr, lan_tx, lan_state_for_server, lan_downloads_for_server, download_dir_for_server).await {
                 error!("lan_remote server error: {e}");
@@ -160,6 +161,7 @@ impl ApplicationImpl for Application {
         let direct_mode_for_lan = lan_direct_mode.clone();
         let lan_state_for_loop = lan_state.clone();
         let window_for_lan = window.clone();
+        let app_for_lan = app.clone();
         glib::MainContext::default().spawn_local(async move {
             while let Ok(msg) = lan_rx.recv_async().await {
                 match msg {
@@ -168,12 +170,15 @@ impl ApplicationImpl for Application {
                         let script = format!("window.__lanRemote && window.__lanRemote.cmd(`{}`);", escaped);
                         webview_for_lan.exec_js(&script);
                     }
-                    lan_remote::LanMessage::PlayUrl(url) => {
+                    lan_remote::LanMessage::PlayUrl { url, title } => {
                         let was_direct = direct_mode_for_lan.get();
-                        tracing::info!(target: "lan_remote", "PlayUrl was_direct={was_direct} url={url}");
+                        tracing::info!(target: "lan_remote", "PlayUrl was_direct={was_direct} title={title:?} url={url}");
                         direct_mode_for_lan.set(true);
                         if let Ok(mut s) = lan_state_for_loop.write() {
                             s.direct_mode = true;
+                            if !title.is_empty() {
+                                s.now_title = title;
+                            }
                         }
                         if was_direct {
                             video_for_lan.send_mpv_command("stop".to_string(), vec![]);
@@ -201,6 +206,7 @@ impl ApplicationImpl for Application {
                         direct_mode_for_lan.set(false);
                         if let Ok(mut s) = lan_state_for_loop.write() {
                             s.direct_mode = false;
+                            s.now_title = String::new();
                         }
                         video_for_lan.send_mpv_command("stop".to_string(), vec![]);
                         webview_for_lan.set_opacity(1.0);
@@ -215,6 +221,10 @@ impl ApplicationImpl for Application {
                     lan_remote::LanMessage::VolumeDelta(delta) => {
                         video_for_lan.send_mpv_command("add".to_string(), vec!["volume".to_string(), delta.to_string()]);
                     }
+                    lan_remote::LanMessage::SetVolume(v) => {
+                        tracing::info!(target: "lan_remote", "SetVolume {v}");
+                        video_for_lan.send_mpv_command("set".to_string(), vec!["volume".to_string(), v.to_string()]);
+                    }
                     lan_remote::LanMessage::SetTrack(kind, id) => {
                         tracing::info!(target: "lan_remote", "SetTrack {kind}={id}");
                         video_for_lan.send_mpv_command("set".to_string(), vec![kind, id]);
@@ -227,6 +237,10 @@ impl ApplicationImpl for Application {
                             s.fullscreen = next;
                         }
                         tracing::info!(target: "lan_remote", "ToggleFullscreen {is_fs} -> {next}");
+                    }
+                    lan_remote::LanMessage::Quit => {
+                        tracing::info!(target: "lan_remote", "Quit");
+                        app_for_lan.quit();
                     }
                 }
             }
@@ -247,11 +261,31 @@ impl ApplicationImpl for Application {
             }
         ));
 
+        let initial_volume_set: Rc<Cell<bool>> = Rc::new(Cell::new(false));
         video.connect_playback_started(clone!(
             #[weak]
             window,
+            #[strong]
+            initial_volume_set,
+            #[strong]
+            lan_tx_for_playback,
             move || {
                 window.disable_idling();
+
+                if initial_volume_set.get() {
+                    return;
+                }
+                initial_volume_set.set(true);
+                let tx = lan_tx_for_playback.clone();
+                tokio::spawn(async move {
+                    let is_hp = tokio::task::spawn_blocking(lan_remote::detect_headphones)
+                        .await
+                        .unwrap_or(false);
+                    if is_hp {
+                        tracing::info!(target: "lan_remote", "headphones detected, initial volume 50%");
+                        let _ = tx.send_async(lan_remote::LanMessage::SetVolume(50.0)).await;
+                    }
+                });
             }
         ));
 
@@ -294,6 +328,7 @@ impl ApplicationImpl for Application {
                     "track-list" => { s.track_list = value; }
                     "aid" => { s.aid = value; }
                     "sid" => { s.sid = value; }
+                    "secondary-sid" => { s.secondary_sid = value; }
                     "paused-for-cache" => { if let Some(v) = value.as_bool() { s.buffering = v; } }
                     "cache-buffering-state" => { if let Some(v) = value.as_f64() { s.buffer_pct = v; } }
                     "volume" => { if let Some(v) = value.as_f64() { s.volume = v; } }

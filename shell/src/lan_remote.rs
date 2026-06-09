@@ -11,7 +11,7 @@ use tracing::{error, info};
 
 pub enum LanMessage {
     EvalJs(String),
-    PlayUrl(String),
+    PlayUrl { url: String, title: String },
     ShowUi(bool),
     Pause,
     Resume,
@@ -20,8 +20,10 @@ pub enum LanMessage {
     SeekRelative(f64),
     SeekAbsolute(f64),
     VolumeDelta(f64),
+    SetVolume(f64),
     SetTrack(String, String),
     ToggleFullscreen,
+    Quit,
 }
 
 #[derive(Default, Clone, Serialize)]
@@ -31,12 +33,14 @@ pub struct StateSnapshot {
     pub duration: f64,
     pub aid: Value,
     pub sid: Value,
+    pub secondary_sid: Value,
     pub track_list: Value,
     pub direct_mode: bool,
     pub buffering: bool,
     pub buffer_pct: f64,
     pub volume: f64,
     pub fullscreen: bool,
+    pub now_title: String,
 }
 
 #[derive(Default, Clone, Serialize, Deserialize)]
@@ -90,6 +94,8 @@ pub struct AppState {
 #[derive(Deserialize)]
 struct PlayBody {
     url: String,
+    #[serde(default)]
+    title: String,
 }
 
 #[derive(Deserialize)]
@@ -100,6 +106,11 @@ struct SeekBody {
 #[derive(Deserialize)]
 struct VolumeBody {
     delta: f64,
+}
+
+#[derive(Deserialize)]
+struct SetVolumeBody {
+    volume: f64,
 }
 
 #[derive(Deserialize)]
@@ -134,6 +145,7 @@ pub fn router(state: AppState) -> Router {
         .route("/seek", post(seek))
         .route("/seek_abs", post(seek_abs))
         .route("/volume", post(volume))
+        .route("/set_volume", post(set_volume_route))
         .route("/set_track", post(set_track))
         .route("/fullscreen", post(toggle_fullscreen))
         .route("/download", post(start_download))
@@ -141,6 +153,8 @@ pub fn router(state: AppState) -> Router {
         .route("/cancel_download", post(cancel_download))
         .route("/delete_download", post(delete_download))
         .route("/state", get(get_state))
+        .route("/quit", post(quit))
+        .route("/suspend", post(suspend))
         .with_state(state)
 }
 
@@ -156,7 +170,7 @@ async fn dispatch(State(state): State<AppState>, Json(body): Json<Value>) -> Sta
 
 async fn play_url(State(state): State<AppState>, Json(body): Json<PlayBody>) -> StatusCode {
     let _ = state.tx.send_async(LanMessage::ShowUi(false)).await;
-    match state.tx.send_async(LanMessage::PlayUrl(body.url)).await {
+    match state.tx.send_async(LanMessage::PlayUrl { url: body.url, title: body.title }).await {
         Ok(_) => StatusCode::ACCEPTED,
         Err(e) => {
             error!("lan_remote play_url channel send failed: {e}");
@@ -223,6 +237,17 @@ async fn seek_abs(State(state): State<AppState>, Json(body): Json<SeekBody>) -> 
 
 async fn volume(State(state): State<AppState>, Json(body): Json<VolumeBody>) -> StatusCode {
     match state.tx.send_async(LanMessage::VolumeDelta(body.delta)).await {
+        Ok(_) => StatusCode::ACCEPTED,
+        Err(_) => StatusCode::INTERNAL_SERVER_ERROR,
+    }
+}
+
+async fn set_volume_route(
+    State(state): State<AppState>,
+    Json(body): Json<SetVolumeBody>,
+) -> StatusCode {
+    let v = body.volume.clamp(0.0, 200.0);
+    match state.tx.send_async(LanMessage::SetVolume(v)).await {
         Ok(_) => StatusCode::ACCEPTED,
         Err(_) => StatusCode::INTERNAL_SERVER_ERROR,
     }
@@ -489,6 +514,71 @@ fn sanitize_filename(name: &str) -> String {
 async fn get_state(State(state): State<AppState>) -> Json<StateSnapshot> {
     let snap = state.state.read().map(|s| s.clone()).unwrap_or_default();
     Json(snap)
+}
+
+async fn quit(State(state): State<AppState>) -> StatusCode {
+    match state.tx.send_async(LanMessage::Quit).await {
+        Ok(_) => StatusCode::ACCEPTED,
+        Err(_) => StatusCode::INTERNAL_SERVER_ERROR,
+    }
+}
+
+async fn suspend(State(_state): State<AppState>) -> StatusCode {
+    let r = tokio::process::Command::new("loginctl")
+        .arg("suspend")
+        .status()
+        .await;
+    match r {
+        Ok(s) if s.success() => StatusCode::ACCEPTED,
+        Ok(s) => {
+            error!("loginctl suspend exited with {s}");
+            StatusCode::INTERNAL_SERVER_ERROR
+        }
+        Err(e) => {
+            error!("loginctl suspend failed to spawn: {e}");
+            StatusCode::INTERNAL_SERVER_ERROR
+        }
+    }
+}
+
+/// Returns true if the active PipeWire/PulseAudio sink is a headphone-class
+/// device (3.5mm jack, USB headset, or Bluetooth audio).
+///
+/// Why: when the user is wearing headphones the Deck's normal speaker
+/// volume is unsafe — we want to start playback at a moderate level.
+pub fn detect_headphones() -> bool {
+    use std::process::Command;
+    let default = match Command::new("pactl").arg("get-default-sink").output() {
+        Ok(o) if o.status.success() => String::from_utf8_lossy(&o.stdout).trim().to_string(),
+        _ => return false,
+    };
+    if default.is_empty() {
+        return false;
+    }
+    let list = match Command::new("pactl").args(["list", "sinks"]).output() {
+        Ok(o) if o.status.success() => String::from_utf8_lossy(&o.stdout).to_string(),
+        _ => return false,
+    };
+    let mut in_target = false;
+    for raw in list.lines() {
+        let line = raw.trim();
+        if let Some(rest) = line.strip_prefix("Name:") {
+            in_target = rest.trim() == default;
+            if in_target && default.to_lowercase().contains("bluez") {
+                return true;
+            }
+            continue;
+        }
+        if in_target {
+            if let Some(rest) = line.strip_prefix("Active Port:") {
+                let port = rest.trim().to_lowercase();
+                return port.contains("headphone")
+                    || port.contains("headset")
+                    || port.contains("bluez");
+            }
+        }
+    }
+    false
 }
 
 pub async fn serve(
