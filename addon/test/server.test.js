@@ -170,3 +170,90 @@ describe('get_subtitles endpoint', () => {
     expect(res.body).toEqual({ ok: false, reason: 'no English subtitles found' });
   });
 });
+
+describe('Deck PWA routes', () => {
+  it('serves /app as installable HTML', async () => {
+    const app = createServer({ fetch: vi.fn(), shellHost: '127.0.0.1:7001' });
+    const res = await request(app).get('/app');
+    expect(res.status).toBe(200);
+    expect(res.headers['content-type']).toMatch(/text\/html/);
+    expect(res.text).toMatch(/manifest\.webmanifest/);
+    expect(res.text).toMatch(/id="q"/); // search box
+  });
+
+  it('serves a valid web manifest', async () => {
+    const app = createServer({ fetch: vi.fn(), shellHost: '127.0.0.1:7001' });
+    const res = await request(app).get('/manifest.webmanifest');
+    expect(res.status).toBe(200);
+    expect(res.body.start_url).toBe('/app');
+    expect(res.body.display).toBe('standalone');
+    expect(res.body.icons.length).toBeGreaterThan(0);
+  });
+
+  it('serves png icons', async () => {
+    const app = createServer({ fetch: vi.fn(), shellHost: '127.0.0.1:7001' });
+    const res = await request(app).get('/icons/icon-192.png');
+    expect(res.status).toBe(200);
+    expect(res.headers['content-type']).toBe('image/png');
+  });
+
+  it('/api/search proxies Cinemeta and returns normalized results', async () => {
+    const fetchFn = vi.fn(async (url) =>
+      url.includes('/movie/')
+        ? { ok: true, json: async () => ({ metas: [{ id: 'tt1', type: 'movie', name: 'M', poster: 'p', releaseInfo: '2013' }] }) }
+        : { ok: true, json: async () => ({ metas: [] }) }
+    );
+    const app = createServer({ fetch: fetchFn, shellHost: '127.0.0.1:7001' });
+    const res = await request(app).get('/api/search?q=m');
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual([{ id: 'tt1', type: 'movie', name: 'M', poster: 'p', year: '2013' }]);
+  });
+
+  it('/api/meta returns episodes', async () => {
+    const fetchFn = vi.fn(async () => ({
+      ok: true,
+      json: async () => ({ meta: { videos: [{ id: 'tt:1:1', season: 1, episode: 1, name: 'Pilot' }] } }),
+    }));
+    const app = createServer({ fetch: fetchFn, shellHost: '127.0.0.1:7001' });
+    const res = await request(app).get('/api/meta?id=tt0944947');
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual([{ id: 'tt:1:1', season: 1, episode: 1, name: 'Pilot', released: null, thumbnail: null }]);
+  });
+
+  it('/api/meta 400s without an id', async () => {
+    const app = createServer({ fetch: vi.fn(), shellHost: '127.0.0.1:7001' });
+    const res = await request(app).get('/api/meta');
+    expect(res.status).toBe(400);
+  });
+});
+
+describe('/api/streams', () => {
+  it('returns summarized streams for a movie', async () => {
+    const fetchFn = vi.fn(async (url) => {
+      if (url.includes('/stream/movie/tt1706620')) {
+        return { ok: true, json: async () => ({ streams: [
+          { name: 'Torrentio\n1080p', title: 'Snow.2013.1080p.BluRay\n👤 150 💾 2.1 GB', infoHash: 'b'.repeat(40), fileIdx: 0 },
+        ] }) };
+      }
+      return { ok: false, status: 404, json: async () => ({}) };
+    });
+    const app = createServer({ fetch: fetchFn, shellHost: '127.0.0.1:7001' });
+    const res = await request(app).get('/api/streams?id=tt1706620&type=movie');
+    expect(res.status).toBe(200);
+    expect(res.body[0]).toMatchObject({ quality: '1080P', seeders: 150, size: '2.1 GB', label: 'Snow.2013.1080p.BluRay' });
+    expect(typeof res.body[0].token).toBe('string');
+  });
+
+  it('builds the series id from season/episode', async () => {
+    let seen = '';
+    const fetchFn = vi.fn(async (url) => { seen = url; return { ok: true, json: async () => ({ streams: [] }) }; });
+    const app = createServer({ fetch: fetchFn, shellHost: '127.0.0.1:7001' });
+    await request(app).get('/api/streams?id=tt0944947&type=series&season=1&episode=7');
+    expect(seen).toMatch(/\/stream\/series\/tt0944947:1:7\.json/);
+  });
+
+  it('400s without an id', async () => {
+    const app = createServer({ fetch: vi.fn(), shellHost: '127.0.0.1:7001' });
+    expect((await request(app).get('/api/streams')).status).toBe(400);
+  });
+});
