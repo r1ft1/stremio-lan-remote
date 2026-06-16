@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createServer } from '../src/server.js';
+import { NoSubtitlesError } from '../src/subtitleFetch.js';
 import request from 'supertest';
 
 describe('cast endpoint', () => {
@@ -132,5 +133,40 @@ describe('subscribe endpoints', () => {
     expect((await loadSubs(config.downloadDir)).map((s) => s.seriesId)).toContain('tt0903747');
     await request(app).get('/unsubscribe?id=tt0903747');
     expect((await loadSubs(config.downloadDir))).toHaveLength(0);
+  });
+});
+
+describe('get_subtitles endpoint', () => {
+  it('fetches subs and posts the path to the shell /sub_add', async () => {
+    const subPosts = [];
+    const fetchFn = vi.fn(async (url, opts) => {
+      if (url.endsWith('/sub_add')) subPosts.push(JSON.parse(opts.body));
+      return { ok: true, status: 202 };
+    });
+    const getSubtitles = vi.fn(async () => '/home/deck/stremio-subs/tt1588170.en.srt');
+    const app = createServer({ fetch: fetchFn, shellHost: '127.0.0.1:7001', getSubtitles });
+    const res = await request(app).post('/get_subtitles').send({ id: 'tt1588170', type: 'movie' });
+    expect(res.status).toBe(200);
+    expect(res.body.ok).toBe(true);
+    expect(getSubtitles).toHaveBeenCalledWith(
+      expect.objectContaining({ imdbId: '1588170', cacheKey: 'tt1588170' }),
+      expect.anything(),
+    );
+    expect(subPosts).toEqual([{ url: '/home/deck/stremio-subs/tt1588170.en.srt' }]);
+  });
+
+  it('returns 400 no-id for an unparseable id', async () => {
+    const app = createServer({ fetch: vi.fn(), shellHost: '127.0.0.1:7001', getSubtitles: vi.fn() });
+    const res = await request(app).post('/get_subtitles').send({ id: 'kitsu:42' });
+    expect(res.status).toBe(400);
+    expect(res.body.reason).toBe('no-id');
+  });
+
+  it('returns 404 when no English subtitles are found', async () => {
+    const getSubtitles = vi.fn(async () => { throw new NoSubtitlesError(); });
+    const app = createServer({ fetch: vi.fn(), shellHost: '127.0.0.1:7001', getSubtitles });
+    const res = await request(app).post('/get_subtitles').send({ id: 'tt9999999' });
+    expect(res.status).toBe(404);
+    expect(res.body).toEqual({ ok: false, reason: 'no English subtitles found' });
   });
 });
