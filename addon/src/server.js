@@ -15,17 +15,20 @@ import { resolveBestStream } from './resolver.js';
 import { config } from './config.js';
 import { startDownload, cancelDownload, deleteDownload, getDownloads } from './downloader.js';
 import { addSub, removeSub } from './subscriptions.js';
+import { fetchEnglishSub, parseMetaId, NoSubtitlesError } from './subtitleFetch.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PLACEHOLDER = readFileSync(resolve(__dirname, '../assets/casting.mp4'));
 const CONTROL_TINY = readFileSync(resolve(__dirname, '../assets/tiny.mp4'));
 const DOWNLOAD_ICON = readFileSync(resolve(__dirname, '../assets/download.png'));
 
-function controllerHtml(title, metaDeepLink) {
+function controllerHtml(title, metaDeepLink, metaId = null, contentType = null) {
   const escapeHtml = (s) =>
     String(s || '').replace(/[<>&"]/g, (c) => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;', '"': '&quot;' })[c]);
   const safeTitle = escapeHtml(title || 'Stream');
   const safeDeepLink = escapeHtml(metaDeepLink || '');
+  const metaIdJson = JSON.stringify(metaId || null);
+  const contentTypeJson = JSON.stringify(contentType || null);
   return /* eslint-disable */ `<!doctype html>
 <html lang="en">
 <head>
@@ -122,6 +125,7 @@ function controllerHtml(title, metaDeepLink) {
     <label for="sid2">Secondary subtitles</label>
     <select id="sid2"></select>
   </div>
+  <div class="row one"><button id="btn-getsubs" style="display:none">⬇ Get English subtitles</button></div>
   <div class="row one">
     <button data-action="fullscreen" id="btn-fs">⛶ Fullscreen</button>
   </div>
@@ -129,12 +133,15 @@ function controllerHtml(title, metaDeepLink) {
   <div class="row one"><button class="danger" data-action="stop">⏹ Stop Deck playback</button></div>
   <div class="row">
     <button data-action="quit" data-confirm="Exit Stremio on the Deck?">⏏ Exit Stremio</button>
-    <button class="danger" data-action="suspend" data-confirm="Suspend the Deck now?">⏻ Suspend Deck</button>
   </div>
   <div class="status" id="status"></div>
 </main>
 <script>
+  const META_ID = ${metaIdJson};
+  const CONTENT_TYPE = ${contentTypeJson};
+  const EN_RE = /english|\\beng\\b|\\ben\\b|\\.en\\.srt$/i;
   const status = document.getElementById('status');
+  const getSubsBtn = document.getElementById('btn-getsubs');
   const seek = document.getElementById('seek');
   const tPos = document.getElementById('t-pos');
   const tDur = document.getElementById('t-dur');
@@ -173,11 +180,22 @@ function controllerHtml(title, metaDeepLink) {
         if (!r.ok) flash('Failed: ' + r.status, 'err');
         else if (action === 'stop' || action === 'quit') {
           setTimeout(() => { window.location.href = 'stremio:///'; }, 200);
-        } else if (action === 'suspend') {
-          flash('Deck suspending…', 'ok');
         }
       } catch (e) { flash('Network error', 'err'); }
     });
+  });
+  getSubsBtn.addEventListener('click', async () => {
+    if (!META_ID) return;
+    getSubsBtn.disabled = true;
+    flash('Fetching subtitles…', '');
+    try {
+      const r = await fetch('/get_subtitles', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ id: META_ID, type: CONTENT_TYPE }) });
+      const j = await r.json().catch(() => ({}));
+      if (r.ok && j.ok) { flash('Subtitles loaded', 'ok'); lastSig = ''; poll(); }
+      else if (j.reason === 'no English subtitles found') { flash('No English subtitles found', 'err'); }
+      else { flash('Failed: ' + (j.reason || r.status), 'err'); }
+    } catch (e) { flash('Network error', 'err'); }
+    getSubsBtn.disabled = false;
   });
   seek.addEventListener('input', () => { seeking = true; });
   seek.addEventListener('change', async () => {
@@ -257,6 +275,9 @@ function controllerHtml(title, metaDeepLink) {
         rebuildSelect(sidSel, lastSubTracks, true);
         rebuildSecondarySubs();
       }
+      const hasEng = list.some((t) => t.type === 'sub' &&
+        (EN_RE.test(t.lang || '') || EN_RE.test(t.title || '') || EN_RE.test(t['external-filename'] || '')));
+      getSubsBtn.style.display = (META_ID && !hasEng) ? '' : 'none';
       if (s.aid != null && s.aid !== false) aidSel.value = String(s.aid);
       if (s.sid != null && s.sid !== false) {
         const before = sidSel.value;
@@ -300,6 +321,7 @@ export function createServer({
     resolveBestStream({ type, id, upstreamUrl: config.streamResolverUrl }),
   fetch: fetchFn = fetch,
   shellHost = config.shellHost,
+  getSubtitles = fetchEnglishSub,
 } = {}) {
   const app = express();
   app.use(getRouter(addonInterface));
@@ -315,7 +337,6 @@ export function createServer({
     'vol-down': { path: '/volume', body: { delta: -5 } },
     fullscreen: { path: '/fullscreen' },
     quit: { path: '/quit' },
-    suspend: { path: '/suspend' },
   };
 
   async function dispatchControl(action) {
@@ -413,6 +434,26 @@ export function createServer({
       });
       res.status(r.ok ? 200 : r.status).end();
     } catch (e) { res.status(502).end(); }
+  });
+
+  app.post('/get_subtitles', async (req, res) => {
+    const meta = parseMetaId(req.body?.id ?? req.query.id);
+    if (!meta) return res.status(400).json({ ok: false, reason: 'no-id' });
+    try {
+      const path = await getSubtitles(meta, { fetch: fetchFn });
+      const r = await fetchFn(`http://${shellHost}/sub_add`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url: path }),
+      });
+      if (!r.ok) return res.status(502).json({ ok: false, reason: 'player unreachable' });
+      return res.json({ ok: true, path });
+    } catch (e) {
+      if (e instanceof NoSubtitlesError) {
+        return res.status(404).json({ ok: false, reason: 'no English subtitles found' });
+      }
+      return res.status(502).json({ ok: false, reason: e.message });
+    }
   });
 
   app.get('/state', async (_req, res) => {
@@ -638,7 +679,7 @@ export function createServer({
         ? `stremio:///detail/series/${id}/${videoId}`
         : `stremio:///detail/movie/${id}`;
       res.set('Content-Type', 'text/html; charset=utf-8');
-      res.send(controllerHtml(title, metaDeepLink));
+      res.send(controllerHtml(title, metaDeepLink, videoId, type));
     } catch (e) {
       res.status(502).send(e.message);
     }
