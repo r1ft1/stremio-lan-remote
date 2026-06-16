@@ -49,17 +49,29 @@ if ! distrobox-enter stremio-build -- true 2>/dev/null; then
 fi
 
 # --- Env discovery ----------------------------------------------------------
+# Steam launches this shortcut WITHOUT exporting XAUTHORITY (and often
+# WAYLAND_DISPLAY) into the child env, and the X display can renumber across a
+# suspend/resume (e.g. :0 -> :1). The old "only fall back when BOTH DISPLAY and
+# WAYLAND_DISPLAY are empty" guard then left XAUTHORITY unset while DISPLAY was
+# set, so the shell couldn't authenticate to X and died before binding :7001.
+# Fix: borrow the live graphical env straight from the running Steam process's
+# /proc/<pid>/environ (same approach as launch-shell.sh); fall back to an
+# xauth_* file on disk. A value already validly set in our own env wins.
 : "${XDG_RUNTIME_DIR:=/run/user/$(id -u)}"
 export XDG_RUNTIME_DIR
 
-if [[ -z "${DISPLAY:-}" && -z "${WAYLAND_DISPLAY:-}" ]]; then
-  XAUTH_FROM_DISK=$(ls -1t /run/user/$(id -u)/xauth_* 2>/dev/null | head -1 || true)
-  if [[ -n "$XAUTH_FROM_DISK" ]]; then
-    export XAUTHORITY="$XAUTH_FROM_DISK"
-  fi
-  export DISPLAY="${DISPLAY:-:0}"
-  echo "no graphical env from parent; using DISPLAY=$DISPLAY XAUTHORITY=${XAUTHORITY:-unset}"
+SPID=$(pgrep -f 'ubuntu12_32/steam' | head -1 || true)
+g() {
+  [ -n "${SPID:-}" ] || return 0
+  tr '\0' '\n' < "/proc/$SPID/environ" 2>/dev/null | grep "^$1=" | head -1 | cut -d= -f2- || true
+}
+export DISPLAY="${DISPLAY:-$(g DISPLAY)}"; export DISPLAY="${DISPLAY:-:0}"
+export WAYLAND_DISPLAY="${WAYLAND_DISPLAY:-$(g WAYLAND_DISPLAY)}"
+export XAUTHORITY="${XAUTHORITY:-$(g XAUTHORITY)}"
+if [[ -z "${XAUTHORITY:-}" ]]; then
+  export XAUTHORITY="$(ls -1t /run/user/$(id -u)/xauth_* 2>/dev/null | head -1 || true)"
 fi
+echo "env after borrow (steam pid=${SPID:-none}): DISPLAY=${DISPLAY:-} WAYLAND_DISPLAY=${WAYLAND_DISPLAY:-} XAUTHORITY=${XAUTHORITY:-unset}"
 
 # --- Background BitTorrent DHT warmup ----------------------------------------
 # First cast after a Deck reboot stalls for 1-2min because streaming-server's
