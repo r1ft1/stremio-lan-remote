@@ -170,3 +170,59 @@ describe('get_subtitles endpoint', () => {
     expect(res.body).toEqual({ ok: false, reason: 'no English subtitles found' });
   });
 });
+
+describe('Deck PWA routes', () => {
+  it('serves /app as installable HTML', async () => {
+    const app = createServer({ fetch: vi.fn(), shellHost: '127.0.0.1:7001' });
+    const res = await request(app).get('/app');
+    expect(res.status).toBe(200);
+    expect(res.headers['content-type']).toMatch(/text\/html/);
+    expect(res.text).toMatch(/manifest\.webmanifest/);
+    expect(res.text).toMatch(/id="q"/); // search box
+  });
+
+  it('serves a valid web manifest', async () => {
+    const app = createServer({ fetch: vi.fn(), shellHost: '127.0.0.1:7001' });
+    const res = await request(app).get('/manifest.webmanifest');
+    expect(res.status).toBe(200);
+    expect(res.body.start_url).toBe('/app');
+    expect(res.body.display).toBe('standalone');
+    expect(res.body.icons.length).toBeGreaterThan(0);
+  });
+
+  it('serves png icons', async () => {
+    const app = createServer({ fetch: vi.fn(), shellHost: '127.0.0.1:7001' });
+    const res = await request(app).get('/icons/icon-192.png');
+    expect(res.status).toBe(200);
+    expect(res.headers['content-type']).toBe('image/png');
+  });
+
+  it('/api/search proxies Cinemeta and returns normalized results', async () => {
+    const fetchFn = vi.fn(async (url) =>
+      url.includes('/movie/')
+        ? { ok: true, json: async () => ({ metas: [{ id: 'tt1', type: 'movie', name: 'M', poster: 'p', releaseInfo: '2013' }] }) }
+        : { ok: true, json: async () => ({ metas: [] }) }
+    );
+    const app = createServer({ fetch: fetchFn, shellHost: '127.0.0.1:7001' });
+    const res = await request(app).get('/api/search?q=m');
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual([{ id: 'tt1', type: 'movie', name: 'M', poster: 'p', year: '2013' }]);
+  });
+
+  it('/api/meta returns episodes', async () => {
+    const fetchFn = vi.fn(async () => ({
+      ok: true,
+      json: async () => ({ meta: { videos: [{ id: 'tt:1:1', season: 1, episode: 1, name: 'Pilot' }] } }),
+    }));
+    const app = createServer({ fetch: fetchFn, shellHost: '127.0.0.1:7001' });
+    const res = await request(app).get('/api/meta?id=tt0944947');
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual([{ id: 'tt:1:1', season: 1, episode: 1, name: 'Pilot', released: null, thumbnail: null }]);
+  });
+
+  it('/api/meta 400s without an id', async () => {
+    const app = createServer({ fetch: vi.fn(), shellHost: '127.0.0.1:7001' });
+    const res = await request(app).get('/api/meta');
+    expect(res.status).toBe(400);
+  });
+});

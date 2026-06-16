@@ -16,11 +16,39 @@ import { config } from './config.js';
 import { startDownload, cancelDownload, deleteDownload, getDownloads } from './downloader.js';
 import { addSub, removeSub } from './subscriptions.js';
 import { fetchEnglishSub, parseMetaId, NoSubtitlesError } from './subtitleFetch.js';
+import { cinemetaSearch, cinemetaPopular, cinemetaEpisodes } from './discover.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PLACEHOLDER = readFileSync(resolve(__dirname, '../assets/casting.mp4'));
 const CONTROL_TINY = readFileSync(resolve(__dirname, '../assets/tiny.mp4'));
 const DOWNLOAD_ICON = readFileSync(resolve(__dirname, '../assets/download.png'));
+const ICONS = {
+  '/icons/icon-180.png': readFileSync(resolve(__dirname, '../assets/icon-180.png')),
+  '/icons/icon-192.png': readFileSync(resolve(__dirname, '../assets/icon-192.png')),
+  '/icons/icon-512.png': readFileSync(resolve(__dirname, '../assets/icon-512.png')),
+};
+
+// Shared <head> bits that make /app + the controller installable + standalone on iOS.
+const PWA_HEAD = `
+<link rel="manifest" href="/manifest.webmanifest">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Deck">
+<link rel="apple-touch-icon" href="/icons/icon-180.png">`;
+
+const MANIFEST = {
+  name: 'Deck Remote',
+  short_name: 'Deck',
+  start_url: '/app',
+  scope: '/',
+  display: 'standalone',
+  background_color: '#0f0f12',
+  theme_color: '#0f0f12',
+  icons: [
+    { src: '/icons/icon-192.png', sizes: '192x192', type: 'image/png', purpose: 'any maskable' },
+    { src: '/icons/icon-512.png', sizes: '512x512', type: 'image/png', purpose: 'any maskable' },
+  ],
+};
 
 function controllerHtml(title, metaDeepLink, metaId = null, contentType = null) {
   const escapeHtml = (s) =>
@@ -34,7 +62,7 @@ function controllerHtml(title, metaDeepLink, metaId = null, contentType = null) 
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<meta name="theme-color" content="#0f0f12">
+<meta name="theme-color" content="#0f0f12">${PWA_HEAD}
 <title>Deck Remote</title>
 <style>
   *{box-sizing:border-box}
@@ -316,6 +344,138 @@ function controllerHtml(title, metaDeepLink, metaId = null, contentType = null) 
 </html>`;
 }
 
+function discoverHtml() {
+  return /* eslint-disable */ `<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0f0f12">${PWA_HEAD}
+<title>Deck</title>
+<style>
+  *{box-sizing:border-box}
+  html,body{margin:0;padding:0;background:#0f0f12;color:#eaeaf2;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;min-height:100vh}
+  body{max-width:600px;margin:0 auto;padding:env(safe-area-inset-top) 14px env(safe-area-inset-bottom)}
+  header{position:sticky;top:0;background:#0f0f12;padding:16px 2px 10px;z-index:5}
+  h1{font-size:14px;font-weight:500;color:#9a9aae;margin:0 0 10px;text-transform:uppercase;letter-spacing:.08em}
+  input{width:100%;font-size:17px;padding:14px 16px;border-radius:14px;border:0;background:#1c1c22;color:#eaeaf2;font-family:inherit;-webkit-appearance:none}
+  input:focus{outline:2px solid #4da3ff}
+  .sec{font-size:13px;color:#9a9aae;margin:18px 2px 8px;text-transform:uppercase;letter-spacing:.06em}
+  .grid{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}
+  .card{background:#1c1c22;border-radius:12px;overflow:hidden;cursor:pointer;-webkit-tap-highlight-color:transparent}
+  .card:active{transform:scale(.97)}
+  .card img{width:100%;aspect-ratio:2/3;object-fit:cover;display:block;background:#15151b}
+  .card .nm{font-size:12px;padding:6px 7px 8px;line-height:1.25;color:#cfcfe0;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+  .eprow{display:flex;align-items:center;gap:12px;padding:14px 12px;background:#1c1c22;border-radius:12px;margin-bottom:8px;cursor:pointer}
+  .eprow:active{background:#2a2a33}
+  .eptag{font-size:13px;font-weight:700;color:#4da3ff;min-width:54px}
+  .epnm{font-size:15px;color:#eaeaf2}
+  .back{display:inline-block;background:#1c1c22;border-radius:12px;padding:12px 16px;font-size:15px;margin:4px 0 4px;cursor:pointer}
+  .muted{color:#9a9aae;font-size:14px;padding:18px 4px}
+</style>
+</head>
+<body>
+<header>
+  <h1>Deck — search &amp; cast</h1>
+  <input id="q" type="search" placeholder="Search movies & shows…" autocomplete="off" autocapitalize="off">
+</header>
+<main id="content"></main>
+<script>
+  const content = document.getElementById('content');
+  const q = document.getElementById('q');
+  const POSTER_FALLBACK = '/icons/icon-192.png';
+  function el(tag, cls){ const e = document.createElement(tag); if (cls) e.className = cls; return e; }
+  function cast(url){ window.location.href = url; }
+
+  function card(item){
+    const c = el('div','card');
+    const img = el('img');
+    img.loading = 'lazy';
+    img.src = item.poster || POSTER_FALLBACK;
+    img.onerror = () => { img.src = POSTER_FALLBACK; };
+    const nm = el('div','nm');
+    nm.textContent = item.year ? (item.name + ' (' + item.year + ')') : item.name;
+    c.appendChild(img); c.appendChild(nm);
+    c.onclick = () => pick(item);
+    return c;
+  }
+  function grid(items){
+    const g = el('div','grid');
+    items.forEach((it) => g.appendChild(card(it)));
+    return g;
+  }
+  function section(title, items){
+    const frag = document.createDocumentFragment();
+    const h = el('div','sec'); h.textContent = title; frag.appendChild(h);
+    if (items.length) frag.appendChild(grid(items));
+    else { const m = el('div','muted'); m.textContent = 'Nothing found.'; frag.appendChild(m); }
+    return frag;
+  }
+
+  async function pick(item){
+    if (item.type === 'series') return showEpisodes(item);
+    cast('/cast?id=' + encodeURIComponent(item.id));
+  }
+
+  async function showEpisodes(series){
+    content.replaceChildren();
+    const back = el('div','back'); back.textContent = '← Back'; back.onclick = loadHome;
+    content.appendChild(back);
+    const title = el('div','sec'); title.textContent = series.name; content.appendChild(title);
+    const loading = el('div','muted'); loading.textContent = 'Loading episodes…'; content.appendChild(loading);
+    try {
+      const r = await fetch('/api/meta?id=' + encodeURIComponent(series.id));
+      const eps = r.ok ? await r.json() : [];
+      loading.remove();
+      if (!eps.length){ const m = el('div','muted'); m.textContent = 'No episodes found.'; content.appendChild(m); return; }
+      let curSeason = null;
+      for (const e of eps){
+        if (e.season !== curSeason){ curSeason = e.season; const sh = el('div','sec'); sh.textContent = 'Season ' + e.season; content.appendChild(sh); }
+        const row = el('div','eprow');
+        const tag = el('div','eptag'); tag.textContent = 'S' + e.season + 'E' + e.episode;
+        const nm = el('div','epnm'); nm.textContent = e.name;
+        row.appendChild(tag); row.appendChild(nm);
+        row.onclick = () => cast('/cast?id=' + encodeURIComponent(series.id) + '&season=' + e.season + '&episode=' + e.episode);
+        content.appendChild(row);
+      }
+    } catch (err){ loading.textContent = 'Couldn\\'t load episodes.'; }
+  }
+
+  async function loadHome(){
+    content.replaceChildren();
+    const m = el('div','muted'); m.textContent = 'Loading…'; content.appendChild(m);
+    const [movies, series] = await Promise.all([
+      fetch('/api/catalog/popular?type=movie').then((r)=>r.ok?r.json():[]).catch(()=>[]),
+      fetch('/api/catalog/popular?type=series').then((r)=>r.ok?r.json():[]).catch(()=>[]),
+    ]);
+    content.replaceChildren();
+    content.appendChild(section('Popular movies', movies.slice(0,9)));
+    content.appendChild(section('Popular shows', series.slice(0,9)));
+  }
+
+  let t = null;
+  q.addEventListener('input', () => {
+    clearTimeout(t);
+    const term = q.value.trim();
+    t = setTimeout(async () => {
+      if (!term){ loadHome(); return; }
+      content.replaceChildren();
+      const m = el('div','muted'); m.textContent = 'Searching…'; content.appendChild(m);
+      try {
+        const r = await fetch('/api/search?q=' + encodeURIComponent(term));
+        const list = r.ok ? await r.json() : [];
+        content.replaceChildren();
+        content.appendChild(section('Results', list));
+      } catch (e){ content.replaceChildren(); const x = el('div','muted'); x.textContent = 'Search failed.'; content.appendChild(x); }
+    }, 350);
+  });
+
+  loadHome();
+</script>
+</body>
+</html>`;
+}
+
 export function createServer({
   resolver = ({ type, id }) =>
     resolveBestStream({ type, id, upstreamUrl: config.streamResolverUrl }),
@@ -361,6 +521,45 @@ export function createServer({
   });
 
   app.use(express.json());
+
+  // --- Deck PWA: search -> cast -> control --------------------------------
+  app.get('/app', (_req, res) => {
+    res.set('Content-Type', 'text/html; charset=utf-8');
+    res.send(discoverHtml());
+  });
+
+  app.get('/manifest.webmanifest', (_req, res) => {
+    res.set('Content-Type', 'application/manifest+json');
+    res.json(MANIFEST);
+  });
+
+  app.get('/icons/:name', (req, res) => {
+    const buf = ICONS[`/icons/${req.params.name}`];
+    if (!buf) return res.status(404).end();
+    res.set('Content-Type', 'image/png');
+    res.set('Cache-Control', 'public, max-age=86400');
+    res.send(buf);
+  });
+
+  app.get('/api/search', async (req, res) => {
+    try {
+      res.json(await cinemetaSearch(req.query.q, { fetch: fetchFn }));
+    } catch (e) { res.status(502).json({ error: e.message }); }
+  });
+
+  app.get('/api/catalog/popular', async (req, res) => {
+    const type = req.query.type === 'series' ? 'series' : 'movie';
+    try {
+      res.json(await cinemetaPopular(type, { fetch: fetchFn }));
+    } catch (e) { res.status(502).json({ error: e.message }); }
+  });
+
+  app.get('/api/meta', async (req, res) => {
+    if (!req.query.id) return res.status(400).json({ error: 'missing id' });
+    try {
+      res.json(await cinemetaEpisodes(req.query.id, { fetch: fetchFn }));
+    } catch (e) { res.status(502).json({ error: e.message }); }
+  });
 
   app.get('/test_fixture.mp4', (_req, res) => {
     res.set('Content-Type', 'video/mp4');
