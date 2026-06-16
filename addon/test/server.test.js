@@ -226,3 +226,34 @@ describe('Deck PWA routes', () => {
     expect(res.status).toBe(400);
   });
 });
+
+describe('/api/streams', () => {
+  it('returns summarized streams for a movie', async () => {
+    const fetchFn = vi.fn(async (url) => {
+      if (url.includes('/stream/movie/tt1706620')) {
+        return { ok: true, json: async () => ({ streams: [
+          { name: 'Torrentio\n1080p', title: 'Snow.2013.1080p.BluRay\n👤 150 💾 2.1 GB', infoHash: 'b'.repeat(40), fileIdx: 0 },
+        ] }) };
+      }
+      return { ok: false, status: 404, json: async () => ({}) };
+    });
+    const app = createServer({ fetch: fetchFn, shellHost: '127.0.0.1:7001' });
+    const res = await request(app).get('/api/streams?id=tt1706620&type=movie');
+    expect(res.status).toBe(200);
+    expect(res.body[0]).toMatchObject({ quality: '1080P', seeders: 150, size: '2.1 GB', label: 'Snow.2013.1080p.BluRay' });
+    expect(typeof res.body[0].token).toBe('string');
+  });
+
+  it('builds the series id from season/episode', async () => {
+    let seen = '';
+    const fetchFn = vi.fn(async (url) => { seen = url; return { ok: true, json: async () => ({ streams: [] }) }; });
+    const app = createServer({ fetch: fetchFn, shellHost: '127.0.0.1:7001' });
+    await request(app).get('/api/streams?id=tt0944947&type=series&season=1&episode=7');
+    expect(seen).toMatch(/\/stream\/series\/tt0944947:1:7\.json/);
+  });
+
+  it('400s without an id', async () => {
+    const app = createServer({ fetch: vi.fn(), shellHost: '127.0.0.1:7001' });
+    expect((await request(app).get('/api/streams')).status).toBe(400);
+  });
+});

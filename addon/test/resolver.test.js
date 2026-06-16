@@ -27,3 +27,24 @@ describe('resolveBestStream', () => {
       .rejects.toThrow();
   });
 });
+
+import { summarizeStreams } from '../src/resolver.js';
+
+describe('summarizeStreams', () => {
+  it('parses quality/seeders/size and emits a decodable token', () => {
+    const streams = [
+      { name: 'Torrentio\n1080p', title: 'Movie.2013.1080p.BluRay\n👤 200 💾 2.5 GB', infoHash: 'a'.repeat(40), fileIdx: 0 },
+    ];
+    const [s] = summarizeStreams(streams);
+    expect(s.quality).toBe('1080P');
+    expect(s.seeders).toBe(200);
+    expect(s.size).toBe('2.5 GB');
+    expect(s.label).toBe('Movie.2013.1080p.BluRay');
+    const decoded = JSON.parse(Buffer.from(s.token, 'base64url').toString('utf8'));
+    expect(decoded.infoHash).toBe('a'.repeat(40));
+  });
+  it('drops entries without infoHash or url', () => {
+    expect(summarizeStreams([{ name: 'x', title: 'y' }])).toEqual([]);
+    expect(summarizeStreams(null)).toEqual([]);
+  });
+});

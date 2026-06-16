@@ -11,7 +11,7 @@ import {
   encodePlayerVideoParamsChanged,
   encodeStreamingServerGetStatistics,
 } from './dispatchEncoder.js';
-import { resolveBestStream } from './resolver.js';
+import { resolveBestStream, resolveAllStreams, summarizeStreams } from './resolver.js';
 import { config } from './config.js';
 import { startDownload, cancelDownload, deleteDownload, getDownloads } from './downloader.js';
 import { addSub, removeSub } from './subscriptions.js';
@@ -57,6 +57,14 @@ function controllerHtml(title, metaDeepLink, metaId = null, contentType = null) 
   const safeDeepLink = escapeHtml(metaDeepLink || '');
   const metaIdJson = JSON.stringify(metaId || null);
   const contentTypeJson = JSON.stringify(contentType || null);
+  // In the PWA flow, "pick a different stream" / stop should stay inside the app
+  // (reopen the picker / go to search), not bounce to the official Stremio app.
+  let pickHref = '/app';
+  if (metaId) {
+    pickHref = contentType === 'series'
+      ? `/app?episodes=${encodeURIComponent(metaId.split(':')[0])}&name=${encodeURIComponent(title || '')}`
+      : `/app?pick=${encodeURIComponent(metaId)}&type=movie&name=${encodeURIComponent(title || '')}`;
+  }
   return /* eslint-disable */ `<!doctype html>
 <html lang="en">
 <head>
@@ -157,7 +165,7 @@ function controllerHtml(title, metaDeepLink, metaId = null, contentType = null) 
   <div class="row one">
     <button data-action="fullscreen" id="btn-fs">⛶ Fullscreen</button>
   </div>
-  <div class="row one"><a class="pick-link" href="${safeDeepLink}">↻ Pick a different stream</a></div>
+  <div class="row one"><a class="pick-link" href="${pickHref}">↻ Pick a different stream</a></div>
   <div class="row one"><button class="danger" data-action="stop">⏹ Stop Deck playback</button></div>
   <div class="row">
     <button data-action="quit" data-confirm="Exit Stremio on the Deck?">⏏ Exit Stremio</button>
@@ -207,7 +215,7 @@ function controllerHtml(title, metaDeepLink, metaId = null, contentType = null) 
         const r = await fetch('/control?action=' + encodeURIComponent(action), { method: 'POST' });
         if (!r.ok) flash('Failed: ' + r.status, 'err');
         else if (action === 'stop' || action === 'quit') {
-          setTimeout(() => { window.location.href = 'stremio:///'; }, 200);
+          setTimeout(() => { window.location.href = '/app'; }, 200);
         }
       } catch (e) { flash('Network error', 'err'); }
     });
@@ -362,7 +370,8 @@ function discoverHtml() {
   input:focus{outline:2px solid #4da3ff}
   .sec{font-size:13px;color:#9a9aae;margin:18px 2px 8px;text-transform:uppercase;letter-spacing:.06em}
   .grid{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}
-  .card{background:#1c1c22;border-radius:12px;overflow:hidden;cursor:pointer;-webkit-tap-highlight-color:transparent}
+  .card{position:relative;background:#1c1c22;border-radius:12px;overflow:hidden;cursor:pointer;-webkit-tap-highlight-color:transparent}
+  .badge{position:absolute;top:6px;left:6px;background:rgba(0,0,0,.78);color:#4da3ff;font-size:10px;font-weight:700;padding:2px 6px;border-radius:6px;letter-spacing:.05em}
   .card:active{transform:scale(.97)}
   .card img{width:100%;aspect-ratio:2/3;object-fit:cover;display:block;background:#15151b}
   .card .nm{font-size:12px;padding:6px 7px 8px;line-height:1.25;color:#cfcfe0;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
@@ -396,6 +405,7 @@ function discoverHtml() {
     const nm = el('div','nm');
     nm.textContent = item.year ? (item.name + ' (' + item.year + ')') : item.name;
     c.appendChild(img); c.appendChild(nm);
+    if (item.type === 'series'){ const b = el('div','badge'); b.textContent = 'TV'; c.appendChild(b); }
     c.onclick = () => pick(item);
     return c;
   }
@@ -414,7 +424,43 @@ function discoverHtml() {
 
   async function pick(item){
     if (item.type === 'series') return showEpisodes(item);
-    cast('/cast?id=' + encodeURIComponent(item.id));
+    showStreams(item.name, item.id, null, null, loadHome);
+  }
+
+  async function showStreams(titleText, baseId, season, episode, onBack){
+    content.replaceChildren();
+    const back = el('div','back'); back.textContent = '← Back'; back.onclick = onBack || loadHome;
+    content.appendChild(back);
+    const isSeries = season != null && episode != null;
+    const h = el('div','sec');
+    h.textContent = titleText + (isSeries ? '  ·  S' + season + 'E' + episode : '');
+    content.appendChild(h);
+    const loading = el('div','muted'); loading.textContent = 'Finding streams…'; content.appendChild(loading);
+    try {
+      let u = '/api/streams?id=' + encodeURIComponent(baseId) + '&type=' + (isSeries ? 'series' : 'movie');
+      if (isSeries) u += '&season=' + season + '&episode=' + episode;
+      const r = await fetch(u);
+      const streams = r.ok ? await r.json() : [];
+      loading.remove();
+      if (!streams.length){ const m = el('div','muted'); m.textContent = 'No streams found.'; content.appendChild(m); return; }
+      for (const s of streams){
+        const row = el('div','eprow');
+        const tag = el('div','eptag'); tag.textContent = s.quality || '—';
+        const wrap = el('div'); wrap.style.flex = '1'; wrap.style.minWidth = '0';
+        const nm = el('div','epnm'); nm.style.cssText = 'overflow:hidden;text-overflow:ellipsis;white-space:nowrap'; nm.textContent = s.label;
+        wrap.appendChild(nm);
+        const meta = [];
+        if (s.seeders) meta.push('👤 ' + s.seeders);
+        if (s.size) meta.push('💾 ' + s.size);
+        if (meta.length){ const sub = el('div'); sub.style.cssText = 'font-size:12px;color:#9a9aae;margin-top:2px'; sub.textContent = meta.join('   '); wrap.appendChild(sub); }
+        row.appendChild(tag); row.appendChild(wrap);
+        let castUrl = '/cast?id=' + encodeURIComponent(baseId);
+        if (isSeries) castUrl += '&season=' + season + '&episode=' + episode;
+        castUrl += '&stream=' + encodeURIComponent(s.token);
+        row.onclick = () => cast(castUrl);
+        content.appendChild(row);
+      }
+    } catch (e){ loading.textContent = 'Couldn\\'t load streams.'; }
   }
 
   async function showEpisodes(series){
@@ -435,7 +481,7 @@ function discoverHtml() {
         const tag = el('div','eptag'); tag.textContent = 'S' + e.season + 'E' + e.episode;
         const nm = el('div','epnm'); nm.textContent = e.name;
         row.appendChild(tag); row.appendChild(nm);
-        row.onclick = () => cast('/cast?id=' + encodeURIComponent(series.id) + '&season=' + e.season + '&episode=' + e.episode);
+        row.onclick = () => showStreams(series.name, series.id, e.season, e.episode, () => showEpisodes(series));
         content.appendChild(row);
       }
     } catch (err){ loading.textContent = 'Couldn\\'t load episodes.'; }
@@ -453,6 +499,25 @@ function discoverHtml() {
     content.appendChild(section('Popular shows', series.slice(0,9)));
   }
 
+  function startView(){
+    const p = new URLSearchParams(location.search);
+    const epId = p.get('episodes');
+    if (epId){ showEpisodes({ id: epId, name: p.get('name') || 'Episodes' }); return; }
+    const pickId = p.get('pick');
+    if (pickId){
+      const type = p.get('type') || 'movie';
+      const name = p.get('name') || 'Streams';
+      if (type === 'series'){
+        const bits = pickId.split(':');
+        showStreams(name, bits[0], bits[1], bits[2], loadHome);
+      } else {
+        showStreams(name, pickId, null, null, loadHome);
+      }
+    } else {
+      loadHome();
+    }
+  }
+
   let t = null;
   q.addEventListener('input', () => {
     clearTimeout(t);
@@ -465,12 +530,16 @@ function discoverHtml() {
         const r = await fetch('/api/search?q=' + encodeURIComponent(term));
         const list = r.ok ? await r.json() : [];
         content.replaceChildren();
-        content.appendChild(section('Results', list));
+        const shows = list.filter((x) => x.type === 'series');
+        const movies = list.filter((x) => x.type !== 'series');
+        if (!shows.length && !movies.length){ const z = el('div','muted'); z.textContent = 'No results.'; content.appendChild(z); }
+        if (shows.length) content.appendChild(section('Shows', shows));
+        if (movies.length) content.appendChild(section('Movies', movies));
       } catch (e){ content.replaceChildren(); const x = el('div','muted'); x.textContent = 'Search failed.'; content.appendChild(x); }
     }, 350);
   });
 
-  loadHome();
+  startView();
 </script>
 </body>
 </html>`;
@@ -558,6 +627,21 @@ export function createServer({
     if (!req.query.id) return res.status(400).json({ error: 'missing id' });
     try {
       res.json(await cinemetaEpisodes(req.query.id, { fetch: fetchFn }));
+    } catch (e) { res.status(502).json({ error: e.message }); }
+  });
+
+  app.get('/api/streams', async (req, res) => {
+    const { id, season, episode } = req.query;
+    if (!id) return res.status(400).json({ error: 'missing id' });
+    const type = req.query.type === 'series' ? 'series' : 'movie';
+    const videoId = type === 'series' && season != null && episode != null
+      ? `${id}:${season}:${episode}`
+      : id;
+    try {
+      const streams = await resolveAllStreams({
+        type, id: videoId, upstreamUrl: config.streamResolverUrl, fetch: fetchFn,
+      });
+      res.json(summarizeStreams(streams));
     } catch (e) { res.status(502).json({ error: e.message }); }
   });
 
