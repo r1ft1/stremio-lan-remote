@@ -229,6 +229,13 @@ impl ApplicationImpl for Application {
                         tracing::info!(target: "lan_remote", "SetTrack {kind}={id}");
                         video_for_lan.send_mpv_command("set".to_string(), vec![kind, id]);
                     }
+                    lan_remote::LanMessage::SubAdd(url) => {
+                        tracing::info!(target: "lan_remote", "SubAdd {url}");
+                        video_for_lan.send_mpv_command(
+                            "sub-add".to_string(),
+                            vec![url, "select".to_string()],
+                        );
+                    }
                     lan_remote::LanMessage::ToggleFullscreen => {
                         let is_fs = window_for_lan.is_fullscreen();
                         let next = !is_fs;

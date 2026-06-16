@@ -22,6 +22,7 @@ pub enum LanMessage {
     VolumeDelta(f64),
     SetVolume(f64),
     SetTrack(String, String),
+    SubAdd(String),
     ToggleFullscreen,
     Quit,
 }
@@ -120,6 +121,11 @@ struct TrackBody {
 }
 
 #[derive(Deserialize)]
+struct SubAddBody {
+    url: String,
+}
+
+#[derive(Deserialize)]
 struct DownloadBody {
     url: String,
     filename: String,
@@ -147,6 +153,7 @@ pub fn router(state: AppState) -> Router {
         .route("/volume", post(volume))
         .route("/set_volume", post(set_volume_route))
         .route("/set_track", post(set_track))
+        .route("/sub_add", post(sub_add))
         .route("/fullscreen", post(toggle_fullscreen))
         .route("/download", post(start_download))
         .route("/downloads", get(get_downloads))
@@ -257,6 +264,16 @@ async fn set_track(State(state): State<AppState>, Json(body): Json<TrackBody>) -
     match state.tx.send_async(LanMessage::SetTrack(body.kind, body.id)).await {
         Ok(_) => StatusCode::ACCEPTED,
         Err(_) => StatusCode::INTERNAL_SERVER_ERROR,
+    }
+}
+
+async fn sub_add(State(state): State<AppState>, Json(body): Json<SubAddBody>) -> StatusCode {
+    match state.tx.send_async(LanMessage::SubAdd(body.url)).await {
+        Ok(_) => StatusCode::ACCEPTED,
+        Err(e) => {
+            error!("lan_remote sub_add channel send failed: {e}");
+            StatusCode::INTERNAL_SERVER_ERROR
+        }
     }
 }
 
