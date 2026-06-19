@@ -105,3 +105,29 @@ Viable v1.1 deployment options to drop the Tailscale requirement:
 - Trade-off: every user needs a GitHub account and to perform a fork + edit + wait-for-CI before using the addon
 
 Recommended path: **Option A (Cloudflare Worker)** for lowest user friction. Implementation is ~30 LOC of TS. Option B as documented fallback for users who refuse to depend on Cloudflare.
+
+## Tailscale re-authentication friction (recurring "additional check" / re-login)
+
+**Problem.** Reaching the Deck keeps requiring Tailscale re-authentication — the
+"Tailscale SSH requires an additional check → visit login.tailscale.com/a/…" prompt
+on frequent access, and the Mac's Tailscale app occasionally drops to "out of
+sync"/"starting" and needs a restart. Constant interruption when administering the
+Deck or reaching it from the phone/Mac.
+
+**Likely cause.**
+- The tailnet's **Tailscale SSH ACL rule uses `"action": "check"`**, which forces
+  periodic browser re-auth before SSH sessions (that's the "additional check"
+  prompt). This is the main, fixable one.
+- Separately, the Mac runs the **macsys** Tailscale variant (system network
+  extension); it can show "out of sync"/stuck "starting", historically worsened by
+  Mullvad capturing its traffic — a restart of the app/extension clears it.
+
+**Fix (Tailscale admin console → Access Controls, or via API key):**
+- Change the `ssh` block's `"action": "check"` → **`"action": "accept"`** to remove
+  the periodic re-auth entirely. (Or keep `check` but add `"checkPeriod": "168h"` to
+  only re-ask weekly.) Needs admin-console access or a Tailscale API/OAuth client with
+  policy-file write scope — not currently automated from this repo.
+- For the Mac macsys flakiness: the durable fix is the Mullvad coexistence setup
+  (WireGuard.app split-tunnel excluding `100.64.0.0/10`) so Tailscale isn't disrupted.
+
+**Status:** deferred — needs Tailscale admin/API access to apply the ACL change.
