@@ -12,6 +12,10 @@ ADDON_DIR="$REPO/addon"
 ADDON_LOG="/tmp/stremio-lan-remote-addon.log"
 SHELL_LOG="/tmp/stremio-lan-remote-shell.log"
 LAUNCHER_LOG="/tmp/stremio-lan-remote-launcher.log"
+# Host the addon advertises in its "Cast to Deck" links. LAN-only by default
+# (mDNS name); override by exporting PUBLIC_HOST before launch if needed. Do NOT
+# hardcode a personal/public hostname here — this file is in a public repo.
+PUBLIC_HOST="${PUBLIC_HOST:-http://steamdeck.local:7000}"
 
 exec >>"$LAUNCHER_LOG" 2>&1
 echo "=== launcher start $(date -Iseconds) ==="
@@ -104,7 +108,7 @@ exec distrobox-enter stremio-build -- bash -c "
   STREAM_RESOLVER_URL=https://torrentio.strem.fun \
   SHELL_HOST=127.0.0.1:7001 \
   BIND=0.0.0.0:7000 \
-  PUBLIC_HOST=steamdeck.REDACTED.ts.net \
+  PUBLIC_HOST='$PUBLIC_HOST' \
   nohup node bin/start.js >> '$ADDON_LOG' 2>&1 &
   ADDON_PID=\$!
 

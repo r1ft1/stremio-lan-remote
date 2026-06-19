@@ -20,11 +20,12 @@ controller. Reuses the existing resolver, `/cast`, and controller (with Get-Subt
 
 ## HTTPS / hosting
 
-Served by the **addon** (same origin → no CORS, no mixed-content). The addon is
-already fronted by **`tailscale serve`** HTTPS on `https://steamdeck.REDACTED.ts.net`
-(evidence: `publicBase()` defaults to `https://<host>` and the existing "Cast to Deck"
-links work). So the PWA rides existing valid-cert HTTPS — no warnings, no new setup.
-(Verify `tailscale serve` is running before relying on it.)
+Served by the **addon** (same origin → no CORS, no mixed-content), **LAN-only** — the
+addon is not exposed to the internet (Tailscale Funnel was turned off). The phone
+reaches it on the same Wi-Fi via the Deck's mDNS name, e.g. `http://steamdeck.local:7000/app`.
+Plain HTTP is fine on iOS for Add-to-Home-Screen (a service worker, which would need
+HTTPS, isn't required here). Do not publish the Deck's address or enable Funnel — the
+addon has no auth.
 
 ## Architecture
 
