@@ -16,6 +16,12 @@ LAUNCHER_LOG="/tmp/stremio-lan-remote-launcher.log"
 # (mDNS name); override by exporting PUBLIC_HOST before launch if needed. Do NOT
 # hardcode a personal/public hostname here — this file is in a public repo.
 PUBLIC_HOST="${PUBLIC_HOST:-http://steamdeck.local:7000}"
+# Shared secret so only your tokenized PWA link can control the Deck (the LAN has
+# no other auth). Generated once, stored locally (mode 600), never committed.
+TOKEN_FILE="$HOME/.config/stremio-lan-remote/token"
+mkdir -p "$(dirname "$TOKEN_FILE")"
+[ -s "$TOKEN_FILE" ] || (umask 077; head -c 24 /dev/urandom | base64 | tr -dc 'A-Za-z0-9' | cut -c1-32 > "$TOKEN_FILE")
+DECK_TOKEN="$(cat "$TOKEN_FILE" 2>/dev/null || true)"
 
 exec >>"$LAUNCHER_LOG" 2>&1
 echo "=== launcher start $(date -Iseconds) ==="
@@ -109,6 +115,7 @@ exec distrobox-enter stremio-build -- bash -c "
   SHELL_HOST=127.0.0.1:7001 \
   BIND=0.0.0.0:7000 \
   PUBLIC_HOST='$PUBLIC_HOST' \
+  DECK_TOKEN='$DECK_TOKEN' \
   nohup node bin/start.js >> '$ADDON_LOG' 2>&1 &
   ADDON_PID=\$!
 

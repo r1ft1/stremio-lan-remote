@@ -257,3 +257,35 @@ describe('/api/streams', () => {
     expect((await request(app).get('/api/streams')).status).toBe(400);
   });
 });
+
+describe('token auth', () => {
+  const T = 'secrettoken123';
+  const mk = () => createServer({ fetch: vi.fn(async()=>({ok:true,status:202,json:async()=>({metas:[]})})), shellHost: '127.0.0.1:7001', deckToken: T });
+
+  it('blocks a protected route without a token', async () => {
+    const res = await request(mk()).get('/app');
+    expect(res.status).toBe(401);
+  });
+  it('accepts ?token= and sets an auth cookie', async () => {
+    const res = await request(mk()).get('/app?token=' + T);
+    expect(res.status).toBe(200);
+    expect(String(res.headers['set-cookie'])).toMatch(/deck_token=secrettoken123/);
+  });
+  it('accepts a valid cookie', async () => {
+    const res = await request(mk()).get('/app').set('Cookie', 'deck_token=' + T);
+    expect(res.status).toBe(200);
+  });
+  it('rejects a wrong token', async () => {
+    expect((await request(mk()).get('/app?token=nope')).status).toBe(401);
+    expect((await request(mk()).get('/app').set('Cookie', 'deck_token=nope')).status).toBe(401);
+  });
+  it('leaves the Stremio manifest + PWA shell assets open', async () => {
+    expect((await request(mk()).get('/manifest.json')).status).toBe(200);
+    expect((await request(mk()).get('/manifest.webmanifest')).status).toBe(200);
+    expect((await request(mk()).get('/icons/icon-192.png')).status).toBe(200);
+  });
+  it('is open when no token is configured', async () => {
+    const open = createServer({ fetch: vi.fn(), shellHost: '127.0.0.1:7001' });
+    expect((await request(open).get('/app')).status).toBe(200);
+  });
+});

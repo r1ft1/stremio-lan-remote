@@ -9,6 +9,10 @@ export const config = {
   castResponseMode: process.env.CAST_RESPONSE_MODE || 'placeholder',
   downloadDir: process.env.DOWNLOAD_DIR || join(homedir(), 'stremio-downloads'),
   serverUrl: process.env.SERVER_URL || 'http://127.0.0.1:11470',
+  // Optional shared secret. When set, control/PWA routes require it (via ?token=
+  // once, then a cookie). Empty = auth disabled (open on the LAN). The launcher
+  // generates + supplies one. Stremio protocol routes stay open regardless.
+  deckToken: process.env.DECK_TOKEN || '',
   pollIntervalMs: Number(process.env.POLL_INTERVAL_MS) || 15 * 60 * 1000,
   minSeeders: Number(process.env.MIN_SEEDERS) || 3,
   retryWindowMs: Number(process.env.RETRY_WINDOW_MS) || 7 * 24 * 60 * 60 * 1000,

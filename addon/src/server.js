@@ -551,9 +551,39 @@ export function createServer({
   fetch: fetchFn = fetch,
   shellHost = config.shellHost,
   getSubtitles = fetchEnglishSub,
+  deckToken = config.deckToken,
 } = {}) {
   const app = express();
   app.use(getRouter(addonInterface));
+
+  // --- Optional token auth for control/PWA routes --------------------------
+  // Stremio protocol routes (handled by getRouter above) and the PWA shell
+  // assets stay open; everything below this guard requires the token. First
+  // request carries ?token=…; we set an httpOnly cookie so subsequent fetches +
+  // navigations authenticate automatically. Disabled entirely if no token set.
+  const AUTH_OPEN = ['/manifest.webmanifest', '/icons/'];
+  const tokenEq = (a, b) => {
+    if (typeof a !== 'string' || typeof b !== 'string' || a.length !== b.length) return false;
+    let r = 0;
+    for (let i = 0; i < a.length; i++) r |= a.charCodeAt(i) ^ b.charCodeAt(i);
+    return r === 0;
+  };
+  const cookieToken = (req) => {
+    const m = (req.headers.cookie || '').match(/(?:^|;\s*)deck_token=([^;]+)/);
+    return m ? decodeURIComponent(m[1]) : '';
+  };
+  app.use((req, res, next) => {
+    if (!deckToken) return next(); // auth disabled
+    if (AUTH_OPEN.some((p) => req.path === p || req.path.startsWith(p))) return next();
+    if (req.query.token && tokenEq(String(req.query.token), deckToken)) {
+      res.cookie('deck_token', deckToken, {
+        httpOnly: true, sameSite: 'lax', path: '/', maxAge: 365 * 24 * 60 * 60 * 1000,
+      });
+      return next();
+    }
+    if (tokenEq(cookieToken(req), deckToken)) return next();
+    return res.status(401).type('text/plain').send('unauthorized — open the app from your tokenized link (…/app?token=…)');
+  });
 
   const CONTROL_MAP = {
     pause: { path: '/pause' },
