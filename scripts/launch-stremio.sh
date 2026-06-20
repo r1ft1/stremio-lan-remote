@@ -106,24 +106,17 @@ echo "env after borrow (steam pid=${SPID:-none}): DISPLAY=${DISPLAY:-} WAYLAND_D
 ) >/dev/null 2>&1 &
 disown
 
-# --- Run both addon + shell from a SINGLE distrobox-enter session ----------
-# Multiple parallel distrobox-enter calls have been observed to race against
-# the container's overlay setup. A single session avoids that.
+# --- Addon: start the single shared service (NOT a second inline instance) --
+# The addon is owned by stremio-lan-remote-addon.service (also started at boot
+# via linger). run-addon.sh sources its own env (PUBLIC_HOST default + token
+# file), so the service is self-sufficient. Starting it here is idempotent — if
+# it is already running, this is a no-op. This is what prevents the old "two
+# addons fighting over port 7000".
+systemctl --user start stremio-lan-remote-addon.service 2>/dev/null || \
+  echo "warning: could not start addon service (is it installed?)" >&2
+
+# --- Run the shell (player) in the distrobox --------------------------------
 exec distrobox-enter stremio-build -- bash -c "
-  cd '$ADDON_DIR' && \
-  STREAM_RESOLVER_URL=https://torrentio.strem.fun \
-  SHELL_HOST=127.0.0.1:7001 \
-  BIND=0.0.0.0:7000 \
-  PUBLIC_HOST='$PUBLIC_HOST' \
-  DECK_TOKEN='$DECK_TOKEN' \
-  nohup node bin/start.js >> '$ADDON_LOG' 2>&1 &
-  ADDON_PID=\$!
-
-  cleanup() {
-    kill \$ADDON_PID 2>/dev/null || true
-  }
-  trap cleanup EXIT
-
   cd '$REPO/shell' && \
   DISPLAY='${DISPLAY:-}' \
   WAYLAND_DISPLAY='${WAYLAND_DISPLAY:-}' \
