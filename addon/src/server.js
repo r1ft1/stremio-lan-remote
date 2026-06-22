@@ -15,7 +15,7 @@ import { resolveBestStream, resolveAllStreams, summarizeStreams } from './resolv
 import { config } from './config.js';
 import { startDownload, cancelDownload, deleteDownload, getDownloads } from './downloader.js';
 import { addSub, removeSub } from './subscriptions.js';
-import { fetchEnglishSub, parseMetaId, NoSubtitlesError } from './subtitleFetch.js';
+import { fetchSub, parseMetaId, NoSubtitlesError } from './subtitleFetch.js';
 import { cinemetaSearch, cinemetaPopular, cinemetaEpisodes } from './discover.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -162,6 +162,7 @@ function controllerHtml(title, metaDeepLink, metaId = null, contentType = null) 
     <select id="sid2"></select>
   </div>
   <div class="row one"><button id="btn-getsubs" style="display:none">⬇ Get English subtitles</button></div>
+  <div class="row one"><button id="btn-getsubs-ja" style="display:none">⬇ Get Japanese subtitles (dual)</button></div>
   <div class="row one">
     <button data-action="fullscreen" id="btn-fs">⛶ Fullscreen</button>
   </div>
@@ -176,8 +177,10 @@ function controllerHtml(title, metaDeepLink, metaId = null, contentType = null) 
   const META_ID = ${metaIdJson};
   const CONTENT_TYPE = ${contentTypeJson};
   const EN_RE = /english|\\beng\\b|\\ben\\b|\\.en\\.srt$/i;
+  const JA_RE = /japanese|\\bjpn\\b|\\bjpa\\b|\\bja\\b|\\.ja\\.srt$/i;
   const status = document.getElementById('status');
   const getSubsBtn = document.getElementById('btn-getsubs');
+  const getSubsBtnJa = document.getElementById('btn-getsubs-ja');
   const seek = document.getElementById('seek');
   const tPos = document.getElementById('t-pos');
   const tDur = document.getElementById('t-dur');
@@ -220,19 +223,21 @@ function controllerHtml(title, metaDeepLink, metaId = null, contentType = null) 
       } catch (e) { flash('Network error', 'err'); }
     });
   });
-  getSubsBtn.addEventListener('click', async () => {
+  async function getSubs(btn, lang, secondary, label) {
     if (!META_ID) return;
-    getSubsBtn.disabled = true;
-    flash('Fetching subtitles…', '');
+    btn.disabled = true;
+    flash('Fetching ' + label + ' subtitles…', '');
     try {
-      const r = await fetch('/get_subtitles', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ id: META_ID, type: CONTENT_TYPE }) });
+      const r = await fetch('/get_subtitles', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ id: META_ID, type: CONTENT_TYPE, lang: lang, secondary: secondary }) });
       const j = await r.json().catch(() => ({}));
-      if (r.ok && j.ok) { flash('Subtitles loaded', 'ok'); lastSig = ''; poll(); }
-      else if (j.reason === 'no English subtitles found') { flash('No English subtitles found', 'err'); }
+      if (r.ok && j.ok) { flash(label + ' subtitles loaded', 'ok'); lastSig = ''; poll(); }
+      else if (r.status === 404) { flash('No ' + label + ' subtitles found', 'err'); }
       else { flash('Failed: ' + (j.reason || r.status), 'err'); }
     } catch (e) { flash('Network error', 'err'); }
-    getSubsBtn.disabled = false;
-  });
+    btn.disabled = false;
+  }
+  getSubsBtn.addEventListener('click', () => getSubs(getSubsBtn, 'eng', false, 'English'));
+  getSubsBtnJa.addEventListener('click', () => getSubs(getSubsBtnJa, 'jpn', true, 'Japanese'));
   seek.addEventListener('input', () => { seeking = true; });
   seek.addEventListener('change', async () => {
     const dur = parseFloat(tDur.dataset.dur || '0');
@@ -311,9 +316,12 @@ function controllerHtml(title, metaDeepLink, metaId = null, contentType = null) 
         rebuildSelect(sidSel, lastSubTracks, true);
         rebuildSecondarySubs();
       }
-      const hasEng = list.some((t) => t.type === 'sub' &&
-        (EN_RE.test(t.lang || '') || EN_RE.test(t.title || '') || EN_RE.test(t['external-filename'] || '')));
+      const subMatch = (re) => list.some((t) => t.type === 'sub' &&
+        (re.test(t.lang || '') || re.test(t.title || '') || re.test(t['external-filename'] || '')));
+      const hasEng = subMatch(EN_RE);
+      const hasJa = subMatch(JA_RE);
       getSubsBtn.style.display = (META_ID && !hasEng) ? '' : 'none';
+      getSubsBtnJa.style.display = (META_ID && !hasJa) ? '' : 'none';
       if (s.aid != null && s.aid !== false) aidSel.value = String(s.aid);
       if (s.sid != null && s.sid !== false) {
         const before = sidSel.value;
@@ -550,7 +558,7 @@ export function createServer({
     resolveBestStream({ type, id, upstreamUrl: config.streamResolverUrl }),
   fetch: fetchFn = fetch,
   shellHost = config.shellHost,
-  getSubtitles = fetchEnglishSub,
+  getSubtitles = fetchSub,
   deckToken = config.deckToken,
 } = {}) {
   const app = express();
@@ -752,18 +760,45 @@ export function createServer({
   app.post('/get_subtitles', async (req, res) => {
     const meta = parseMetaId(req.body?.id ?? req.query.id);
     if (!meta) return res.status(400).json({ ok: false, reason: 'no-id' });
+    const lang = (req.body?.lang ?? req.query.lang) === 'jpn' ? 'jpn' : 'eng';
+    const secondary = req.body?.secondary === true || req.query.secondary === '1';
+    const post = (p, body) => fetchFn(`http://${shellHost}${p}`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+    });
+    const basename = (p) => String(p).split('/').pop();
+    const getState = async () => {
+      const r = await fetchFn(`http://${shellHost}/state`);
+      return r.ok ? r.json() : null;
+    };
     try {
-      const path = await getSubtitles(meta, { fetch: fetchFn });
-      const r = await fetchFn(`http://${shellHost}/sub_add`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ url: path }),
-      });
-      if (!r.ok) return res.status(502).json({ ok: false, reason: 'player unreachable' });
-      return res.json({ ok: true, path });
+      const path = await getSubtitles(meta, { fetch: fetchFn, lang });
+      if (!secondary) {
+        const r = await post('/sub_add', { url: path });
+        if (!r.ok) return res.status(502).json({ ok: false, reason: 'player unreachable' });
+        return res.json({ ok: true, path });
+      }
+      // Secondary (dual-subs): add it, move it to the secondary track, restore
+      // the previous primary — so e.g. English stays on the bottom and Japanese
+      // shows on top. Done via existing shell endpoints, no shell rebuild.
+      const before = await getState();
+      const prevSid = before?.sid;
+      const ra = await post('/sub_add', { url: path });
+      if (!ra.ok) return res.status(502).json({ ok: false, reason: 'player unreachable' });
+      // small settle so the new track appears in the track list
+      await new Promise((r) => setTimeout(r, 600));
+      const after = await getState();
+      const track = (after?.track_list || []).find(
+        (t) => t.type === 'sub' && basename(String(t['external-filename'] || '')) === basename(path)
+      );
+      if (!track) return res.json({ ok: true, path, note: 'added as primary; secondary slot not set' });
+      await post('/set_track', { kind: 'secondary-sid', id: String(track.id) });
+      if (prevSid != null && prevSid !== false && prevSid !== 'no' && String(prevSid) !== String(track.id)) {
+        await post('/set_track', { kind: 'sid', id: String(prevSid) });
+      }
+      return res.json({ ok: true, path, secondary: true, id: track.id });
     } catch (e) {
       if (e instanceof NoSubtitlesError) {
-        return res.status(404).json({ ok: false, reason: 'no English subtitles found' });
+        return res.status(404).json({ ok: false, reason: e.message });
       }
       return res.status(502).json({ ok: false, reason: e.message });
     }

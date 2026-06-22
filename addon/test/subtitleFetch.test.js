@@ -134,3 +134,31 @@ describe('fetchEnglishSub', () => {
     await expect(fetchEnglishSub(meta, { fetch: fetchFn, cacheDir })).rejects.toBeInstanceOf(NoSubtitlesError);
   });
 });
+
+import { fetchSub, LANGS } from '../src/subtitleFetch.js';
+import { mkdtempSync as mkdtemp2, existsSync as exists2, rmSync as rm2 } from 'node:fs';
+import { tmpdir as tmp2 } from 'node:os';
+import { join as join2 } from 'node:path';
+import { gzipSync as gz2 } from 'node:zlib';
+import { buildQueryUrl as bq2, parseMetaId as pm2 } from '../src/subtitleFetch.js';
+
+describe('language support', () => {
+  it('buildQueryUrl uses the Japanese language code', () => {
+    expect(bq2({ imdbId: '1588170' }, 'jpn')).toMatch(/sublanguageid-jpn$/);
+    expect(bq2({ imdbId: '1588170' }, 'eng')).toMatch(/sublanguageid-eng$/);
+  });
+  it('fetchSub caches Japanese under a .ja.srt path', async () => {
+    const dir = mkdtemp2(join2(tmp2(), 'subs-ja-'));
+    const fetchFn = async (url) => url.includes('/search/')
+      ? { ok: true, json: async () => [{ SubFormat: 'srt', SubDownloadsCnt: '9', MovieReleaseName: 'BluRay', SubDownloadLink: 'https://dl/x.gz' }] }
+      : { ok: true, arrayBuffer: async () => gz2(Buffer.from('1\n00:00:01,000 --> 00:00:02,000\nこんにちは\n')) };
+    const path = await fetchSub(pm2('tt1588170'), { lang: 'jpn', fetch: fetchFn, cacheDir: dir });
+    expect(path).toBe(join2(dir, 'tt1588170.ja.srt'));
+    expect(exists2(path)).toBe(true);
+    rm2(dir, { recursive: true, force: true });
+  });
+  it('LANGS maps eng/jpn to extensions', () => {
+    expect(LANGS.eng.ext).toBe('en');
+    expect(LANGS.jpn.ext).toBe('ja');
+  });
+});

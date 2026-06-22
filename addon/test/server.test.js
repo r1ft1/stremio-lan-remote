@@ -162,12 +162,48 @@ describe('get_subtitles endpoint', () => {
     expect(res.body.reason).toBe('no-id');
   });
 
-  it('returns 404 when no English subtitles are found', async () => {
-    const getSubtitles = vi.fn(async () => { throw new NoSubtitlesError(); });
+  it('returns 404 when no subtitles are found', async () => {
+    const getSubtitles = vi.fn(async () => { throw new NoSubtitlesError('no English subtitles found'); });
     const app = createServer({ fetch: vi.fn(), shellHost: '127.0.0.1:7001', getSubtitles });
     const res = await request(app).post('/get_subtitles').send({ id: 'tt9999999' });
     expect(res.status).toBe(404);
     expect(res.body).toEqual({ ok: false, reason: 'no English subtitles found' });
+  });
+
+  it('passes the requested language through to the fetcher', async () => {
+    const getSubtitles = vi.fn(async () => '/home/deck/stremio-subs/tt1588170.ja.srt');
+    const fetchFn = vi.fn(async () => ({ ok: true, status: 202 }));
+    const app = createServer({ fetch: fetchFn, shellHost: '127.0.0.1:7001', getSubtitles });
+    await request(app).post('/get_subtitles').send({ id: 'tt1588170', lang: 'jpn' });
+    expect(getSubtitles).toHaveBeenCalledWith(
+      expect.objectContaining({ imdbId: '1588170' }),
+      expect.objectContaining({ lang: 'jpn' }),
+    );
+  });
+
+  it('loads a secondary (dual) sub: adds it, sets secondary-sid, restores primary', async () => {
+    const calls = [];
+    const fetchFn = vi.fn(async (url, opts) => {
+      calls.push({ url, body: opts && opts.body ? JSON.parse(opts.body) : null });
+      if (url.endsWith('/state')) {
+        // first /state = before (English primary sid=1); second = after add (new track id=2)
+        const nth = calls.filter((c) => c.url.endsWith('/state')).length;
+        const tracks = nth === 1
+          ? [{ type: 'sub', id: 1, 'external-filename': '/home/deck/stremio-subs/x.en.srt' }]
+          : [{ type: 'sub', id: 1, 'external-filename': '/home/deck/stremio-subs/x.en.srt' },
+             { type: 'sub', id: 2, 'external-filename': '/home/deck/stremio-subs/tt1.ja.srt' }];
+        return { ok: true, json: async () => ({ sid: 1, track_list: tracks }) };
+      }
+      return { ok: true, status: 202 };
+    });
+    const getSubtitles = vi.fn(async () => '/home/deck/stremio-subs/tt1.ja.srt');
+    const app = createServer({ fetch: fetchFn, shellHost: '127.0.0.1:7001', getSubtitles });
+    const res = await request(app).post('/get_subtitles').send({ id: 'tt1', lang: 'jpn', secondary: true });
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ ok: true, secondary: true, id: 2 });
+    const setTracks = calls.filter((c) => c.url.endsWith('/set_track')).map((c) => c.body);
+    expect(setTracks).toContainEqual({ kind: 'secondary-sid', id: '2' });
+    expect(setTracks).toContainEqual({ kind: 'sid', id: '1' }); // primary restored
   });
 });
 

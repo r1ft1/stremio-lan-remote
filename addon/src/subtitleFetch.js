@@ -3,13 +3,20 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 
-// Thrown when a search succeeds but yields no usable English subtitle.
+// Thrown when a search succeeds but yields no usable subtitle.
 export class NoSubtitlesError extends Error {
-  constructor(message = 'no English subtitles found') {
+  constructor(message = 'no subtitles found') {
     super(message);
     this.name = 'NoSubtitlesError';
   }
 }
+
+// Supported languages: OpenSubtitles legacy code + the file-extension tag we
+// cache under (and that the controller matches to detect existing tracks).
+export const LANGS = {
+  eng: { code: 'eng', ext: 'en', name: 'English' },
+  jpn: { code: 'jpn', ext: 'ja', name: 'Japanese' },
+};
 
 // Parse a Stremio meta id into the pieces the OpenSubtitles query + cache need.
 //   "tt1588170"     -> { imdbId:'1588170', season:null, episode:null, cacheKey:'tt1588170' }
@@ -29,16 +36,17 @@ export function parseMetaId(id) {
   return { imdbId, season: null, episode: null, cacheKey: `tt${imdbId}` };
 }
 
-// Build the OpenSubtitles legacy REST search URL (English only).
-export function buildQueryUrl({ imdbId, season, episode }) {
+// Build the OpenSubtitles legacy REST search URL for a language (default English).
+export function buildQueryUrl({ imdbId, season, episode }, lang = 'eng') {
+  const code = (LANGS[lang] || LANGS.eng).code;
   const base = 'https://rest.opensubtitles.org/search';
   if (season != null && episode != null) {
-    return `${base}/episode-${episode}/imdbid-${imdbId}/season-${season}/sublanguageid-eng`;
+    return `${base}/episode-${episode}/imdbid-${imdbId}/season-${season}/sublanguageid-${code}`;
   }
-  return `${base}/imdbid-${imdbId}/sublanguageid-eng`;
+  return `${base}/imdbid-${imdbId}/sublanguageid-${code}`;
 }
 
-// From the OpenSubtitles result array, choose the best full English .srt:
+// From the OpenSubtitles result array, choose the best full .srt:
 // srt only, exclude "foreign parts only" partials, prefer most-downloaded.
 export function pickBest(results) {
   if (!Array.isArray(results)) return null;
@@ -76,32 +84,39 @@ export function cleanSrt(text) {
   return out.join('\n\n') + '\n';
 }
 
-// Fetch + clean + cache the best English subtitle for a parsed meta id.
+// Fetch + clean + cache the best subtitle for a parsed meta id in a language.
 // Returns the absolute path to the .srt on disk (readable by the shell's mpv,
-// which shares $HOME inside the distrobox). Caches by cacheKey: a repeat call is
-// an instant offline hit. `deps` are injectable for tests.
-export async function fetchEnglishSub(meta, deps = {}) {
+// which shares $HOME inside the distrobox). Caches by cacheKey+lang: a repeat
+// call is an instant offline hit. `deps`/`opts` are injectable for tests.
+export async function fetchSub(meta, opts = {}) {
   const {
+    lang = 'eng',
     fetch: fetchFn = fetch,
     gunzip = gunzipSync,
     cacheDir = join(homedir(), 'stremio-subs'),
-  } = deps;
+  } = opts;
+  const L = LANGS[lang] || LANGS.eng;
   if (!meta || !meta.imdbId || !meta.cacheKey) throw new NoSubtitlesError('no-id');
 
   mkdirSync(cacheDir, { recursive: true });
-  const outPath = join(cacheDir, `${meta.cacheKey}.en.srt`);
+  const outPath = join(cacheDir, `${meta.cacheKey}.${L.ext}.srt`);
   if (existsSync(outPath)) return outPath; // cache hit — no network
 
   const headers = { 'User-Agent': 'TemporaryUserAgent' };
-  const searchUrl = buildQueryUrl(meta);
+  const searchUrl = buildQueryUrl(meta, L.code);
   const sr = await fetchFn(searchUrl, { headers });
   if (!sr.ok) throw new Error(`opensubtitles search ${sr.status}`);
   const best = pickBest(await sr.json());
-  if (!best || !best.SubDownloadLink) throw new NoSubtitlesError();
+  if (!best || !best.SubDownloadLink) throw new NoSubtitlesError(`no ${L.name} subtitles found`);
 
   const dr = await fetchFn(best.SubDownloadLink, { headers });
   if (!dr.ok) throw new Error(`opensubtitles download ${dr.status}`);
   const srt = cleanSrt(gunzip(Buffer.from(await dr.arrayBuffer())).toString('utf8'));
   writeFileSync(outPath, srt, 'utf8');
   return outPath;
+}
+
+// Back-compat thin wrapper (English).
+export async function fetchEnglishSub(meta, deps = {}) {
+  return fetchSub(meta, { ...deps, lang: 'eng' });
 }
