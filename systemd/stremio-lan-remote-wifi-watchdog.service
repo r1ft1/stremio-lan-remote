@@ -1,0 +1,6 @@
+[Unit]
+Description=Stremio LAN Remote Wi-Fi reconnect watchdog
+
+[Service]
+Type=oneshot
+ExecStart=%h/dev/stremio-lan-remote/scripts/wifi-watchdog.sh

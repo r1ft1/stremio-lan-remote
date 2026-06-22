@@ -1,0 +1,11 @@
+[Unit]
+Description=Run the Wi-Fi reconnect watchdog every 30s
+
+[Timer]
+OnBootSec=45s
+OnUnitInactiveSec=30s
+AccuracySec=2s
+Unit=stremio-lan-remote-wifi-watchdog.service
+
+[Install]
+WantedBy=timers.target
