@@ -10,9 +10,81 @@ Also supports background downloads to the Deck with resume-on-restart, a "Deck D
 
 The mobile controller also exposes an **Exit Stremio** button (behind a confirmation prompt). When playback starts and headphones are detected on the Deck (3.5mm jack, USB headset, or Bluetooth), the initial volume is automatically set to 50%. The volume cap was raised from mpv's default 130% to 200%.
 
+## Getting started on a Steam Deck (from source)
+
+> **Heads up — not one-click.** This is a custom Rust/GTK build of the Stremio shell plus a Node addon, so first-time setup is manual (budget ~20 min). It's vibecoded, but the author uses it daily. Everything runs **locally on your Deck**; nothing is exposed to the internet unless you deliberately do so.
+
+Do all of this in **Desktop Mode**.
+
+### 1. Prerequisites
+- A Steam Deck on SteamOS, on your Wi-Fi. SteamOS already ships `podman`; install [`distrobox`](https://distrobox.it/) if it's missing.
+- **[Tailscale](https://tailscale.com)** — optional but strongly recommended. It's how you reach the phone controller over **HTTPS** (which Firefox/iOS need), and how you SSH into the Deck to debug. Install it on the Deck *and* your phone, both on the same tailnet.
+
+### 2. Clone
+```bash
+git clone https://github.com/r1ft1/stremio-lan-remote.git ~/dev/stremio-lan-remote
+cd ~/dev/stremio-lan-remote
+```
+
+### 3. Create the build container
+The shell needs GTK4 / WebKit / mpv, so it builds inside an Arch `distrobox` named `stremio-build`:
+```bash
+distrobox create --name stremio-build --image docker.io/library/archlinux:latest
+distrobox-enter stremio-build -- bash -c '
+  sudo pacman -Syu --noconfirm base-devel git rustup pkgconf \
+    gtk4 libadwaita webkitgtk-6.0 mpv nodejs npm && rustup default stable'
+```
+
+### 4. Build
+```bash
+# Rust shell — a few minutes the first time
+distrobox-enter stremio-build -- bash -c "cd ~/dev/stremio-lan-remote/shell && cargo build --release"
+# Addon dependencies (plain Node, no build step)
+distrobox-enter stremio-build -- bash -c "cd ~/dev/stremio-lan-remote/addon && npm install"
+```
+
+### 5. (Optional) RealDebrid
+For instant cached streams, save your RealDebrid API key to a file — **never commit it** (it lives outside the repo):
+```bash
+mkdir -p ~/.config/stremio-lan-remote
+printf '%s' 'YOUR_RD_API_KEY' > ~/.config/stremio-lan-remote/realdebrid-key
+chmod 600 ~/.config/stremio-lan-remote/realdebrid-key
+```
+Without a key, the addon falls back to plain torrentio (streams via the Deck's built-in BitTorrent server). *(Note: RealDebrid + torrentio is currently broken by RealDebrid's 2026 API changes — plain torrentio still works.)*
+
+### 6. Run it
+```bash
+./scripts/install-steam-shortcut.sh    # adds a .desktop entry (KDE menu + "Add a Non-Steam Game")
+```
+Then in Steam → **Add a Non-Steam Game → Stremio LAN Remote**, and launch it from Game Mode. Or run it directly:
+```bash
+./scripts/launch-stremio.sh
+```
+This starts the player shell + the addon on port 7000. A control **token is auto-generated** at `~/.config/stremio-lan-remote/token` on first launch.
+
+### 7. (Optional) Keep the addon alive across sleep/reboot
+```bash
+mkdir -p ~/.config/systemd/user
+cp systemd/stremio-lan-remote-addon.service ~/.config/systemd/user/
+systemctl --user daemon-reload
+systemctl --user enable --now stremio-lan-remote-addon.service
+loginctl enable-linger "$USER"
+```
+
+### 8. Open the controller
+- **On your Wi-Fi:** `http://steamdeck.local:7000/app?token=<token>` (token from the file above; use `http://<deck-lan-ip>:7000/...` if `steamdeck.local` won't resolve).
+- **Over Tailscale (HTTPS — required for Firefox/iOS):** give the addon a real cert:
+  ```bash
+  sudo tailscale serve --bg --https=443 127.0.0.1:7000
+  ```
+  then open `https://<deck>.<your-tailnet>.ts.net/app?token=<token>`. After the first tokenized visit a 1-year cookie is set, so the bare host works — **Add to Home Screen** for an app icon.
+
+### Debugging
+SSH in over Tailscale: `ssh deck@<deck-tailscale-ip>`. Logs live in `/tmp/`: `stremio-lan-remote-addon.log`, `stremio-lan-remote-shell.log`, `stremio-lan-remote-launcher.log`. Rebuild the shell after edits with the Step 4 command, then relaunch via Steam.
+
 ## Install on Stremio mobile (Android, iOS, or web)
 
-This addon is **self-hosted on your own SteamDeck** and is intended for your **local network only** — it has no authentication, so do **not** expose it to the internet. Set it up per [docs/install.md](docs/install.md), then install it from your Deck's address on the same Wi-Fi:
+This addon is **self-hosted on your own SteamDeck** and intended for your **local network** (or your own private Tailscale tailnet). Control/PWA routes are protected by an auto-generated token; even so, do **not** port-forward or tunnel it to the public internet. Set up the Deck first (see [Getting started](#getting-started-on-a-steam-deck-from-source) below or [docs/install.md](docs/install.md)), then install it from your Deck's address on the same Wi-Fi:
 
 > **`http://steamdeck.local:7000/manifest.json`**  (or `http://<your-deck-lan-ip>:7000/manifest.json`)
 

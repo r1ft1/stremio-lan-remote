@@ -2,7 +2,7 @@
 
 **Status:** Draft for upstream discussion
 **Target repo:** [Stremio/stremio-linux-shell](https://github.com/Stremio/stremio-linux-shell)
-**Author:** r1ft1@users.noreply.github.com
+**Author:** [@r1ft1](https://github.com/r1ft1)
 
 ## Why
 
