@@ -1,5 +1,6 @@
 import express from 'express';
-import { readFileSync } from 'node:fs';
+import { readFileSync, writeFileSync } from 'node:fs';
+import { homedir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { dirname, resolve } from 'node:path';
 import sdk from 'stremio-addon-sdk';
@@ -19,6 +20,30 @@ import { fetchSub, parseMetaId, NoSubtitlesError } from './subtitleFetch.js';
 import { cinemetaSearch, cinemetaPopular, cinemetaEpisodes } from './discover.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
+
+// --- Recently-played history (cast log) -------------------------------------
+// The addon records each successful cast so the PWA home can show a "Recently
+// played" row. Stored as a small JSON list, newest first, deduped by base id.
+const HISTORY_FILE = resolve(homedir(), '.config/stremio-lan-remote/history.json');
+function readHistory() {
+  try {
+    const h = JSON.parse(readFileSync(HISTORY_FILE, 'utf8'));
+    return Array.isArray(h) ? h : [];
+  } catch {
+    return [];
+  }
+}
+function recordHistory({ id, title, type }) {
+  const baseId = String(id || '').split(':')[0];
+  if (!baseId) return;
+  try {
+    const hist = readHistory().filter((h) => h.id !== baseId);
+    hist.unshift({ id: baseId, title: title || baseId, type: type || 'movie', ts: Date.now() });
+    writeFileSync(HISTORY_FILE, JSON.stringify(hist.slice(0, 20)));
+  } catch {
+    /* best-effort; never block a cast on history I/O */
+  }
+}
 const PLACEHOLDER = readFileSync(resolve(__dirname, '../assets/casting.mp4'));
 const CONTROL_TINY = readFileSync(resolve(__dirname, '../assets/tiny.mp4'));
 const DOWNLOAD_ICON = readFileSync(resolve(__dirname, '../assets/download.png'));
@@ -107,6 +132,7 @@ function controllerHtml(title, metaDeepLink, metaId = null, contentType = null) 
   .buffer .pct{margin-left:auto;color:#9a9aae;font-variant-numeric:tabular-nums}
   @keyframes spin{to{transform:rotate(360deg)}}
   .volume-bar{display:flex;align-items:center;gap:10px;background:#1c1c22;padding:10px 14px;border-radius:12px}
+  .volume-bar input[type=range]{flex:1;min-width:0;width:auto;height:30px}
   .volume-label{font-size:12px;color:#9a9aae;text-transform:uppercase;letter-spacing:.08em;flex-shrink:0}
   .volume-track{flex:1;height:6px;background:#2e2e3a;border-radius:3px;overflow:hidden}
   .volume-fill{height:100%;background:#3e3aed;width:0%;transition:width .15s}
@@ -140,13 +166,9 @@ function controllerHtml(title, metaDeepLink, metaId = null, contentType = null) 
     <button data-action="seek-back">⏪ -10s</button>
     <button data-action="seek-fwd">+10s ⏩</button>
   </div>
-  <div class="row">
-    <button data-action="vol-down">🔉 Vol −</button>
-    <button data-action="vol-up">🔊 Vol +</button>
-  </div>
   <div class="volume-bar">
-    <span class="volume-label">Volume</span>
-    <div class="volume-track"><div class="volume-fill" id="vol-fill"></div></div>
+    <span class="volume-label">🔊</span>
+    <input type="range" id="vol-slider" min="0" max="200" value="100">
     <span class="volume-num" id="vol-num">—</span>
   </div>
   <div class="picker">
@@ -189,10 +211,11 @@ function controllerHtml(title, metaDeepLink, metaId = null, contentType = null) 
   const sid2Sel = document.getElementById('sid2');
   const buffer = document.getElementById('buffer');
   const bufferPct = document.getElementById('buffer-pct');
-  const volFill = document.getElementById('vol-fill');
+  const volSlider = document.getElementById('vol-slider');
   const volNum = document.getElementById('vol-num');
   const btnFs = document.getElementById('btn-fs');
   let seeking = false;
+  let volSeeking = false;
   let lastSig = '';
   let lastTimePos = -1;
   let lastTimeAt = 0;
@@ -238,6 +261,13 @@ function controllerHtml(title, metaDeepLink, metaId = null, contentType = null) 
   }
   getSubsBtn.addEventListener('click', () => getSubs(getSubsBtn, 'eng', false, 'English'));
   getSubsBtnJa.addEventListener('click', () => getSubs(getSubsBtnJa, 'jpn', true, 'Japanese'));
+  volSlider.addEventListener('input', () => { volSeeking = true; volNum.textContent = volSlider.value + '%'; });
+  volSlider.addEventListener('change', async () => {
+    try {
+      await fetch('/set_volume', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ volume: parseInt(volSlider.value, 10) }) });
+    } catch (e) { flash('Network error', 'err'); }
+    setTimeout(() => { volSeeking = false; }, 500);
+  });
   seek.addEventListener('input', () => { seeking = true; });
   seek.addEventListener('change', async () => {
     const dur = parseFloat(tDur.dataset.dur || '0');
@@ -331,8 +361,7 @@ function controllerHtml(title, metaDeepLink, metaId = null, contentType = null) 
       if (s.secondary_sid != null && s.secondary_sid !== false) sid2Sel.value = String(s.secondary_sid);
       else if (s.secondary_sid === false) sid2Sel.value = 'no';
       const vol = Math.max(0, Math.min(200, Number(s.volume) || 0));
-      volFill.style.width = Math.min(100, (vol / 200) * 100) + '%';
-      volNum.textContent = Math.round(vol) + '%';
+      if (!volSeeking) { volSlider.value = String(Math.round(vol)); volNum.textContent = Math.round(vol) + '%'; }
       if (s.fullscreen) btnFs.classList.add('active'); else btnFs.classList.remove('active');
       btnFs.textContent = s.fullscreen ? '⛶ Exit Fullscreen' : '⛶ Fullscreen';
       const now = Date.now();
@@ -498,16 +527,18 @@ function discoverHtml() {
   async function loadHome(){
     content.replaceChildren();
     const m = el('div','muted'); m.textContent = 'Loading…'; content.appendChild(m);
-    const [movies, series] = await Promise.all([
+    const [hist, movies, series] = await Promise.all([
+      fetch('/api/history').then((r)=>r.ok?r.json():[]).catch(()=>[]),
       fetch('/api/catalog/popular?type=movie').then((r)=>r.ok?r.json():[]).catch(()=>[]),
       fetch('/api/catalog/popular?type=series').then((r)=>r.ok?r.json():[]).catch(()=>[]),
     ]);
     content.replaceChildren();
+    if (hist.length) content.appendChild(section('Recently played', hist));
     content.appendChild(section('Popular movies', movies.slice(0,9)));
     content.appendChild(section('Popular shows', series.slice(0,9)));
   }
 
-  function startView(){
+  async function startView(){
     const p = new URLSearchParams(location.search);
     const epId = p.get('episodes');
     if (epId){ showEpisodes({ id: epId, name: p.get('name') || 'Episodes' }); return; }
@@ -521,9 +552,17 @@ function discoverHtml() {
       } else {
         showStreams(name, pickId, null, null, loadHome);
       }
-    } else {
-      loadHome();
+      return;
     }
+    // Nothing specific requested: if the Deck is already playing something,
+    // open the play/pause remote instead of the home screen (?home=1 forces home).
+    if (p.get('home') !== '1'){
+      try {
+        const r = await fetch('/state');
+        if (r.ok){ const s = await r.json(); if (s && s.now_title){ location.href = '/remote'; return; } }
+      } catch (e) {}
+    }
+    loadHome();
   }
 
   let t = null;
@@ -630,6 +669,9 @@ export function createServer({
   app.use(express.json());
 
   // --- Deck PWA: search -> cast -> control --------------------------------
+  // Bare URL → controller, so the Tailscale HTTPS link can be just the host.
+  app.get('/', (_req, res) => res.redirect('/app'));
+
   app.get('/app', (_req, res) => {
     res.set('Content-Type', 'text/html; charset=utf-8');
     res.send(discoverHtml());
@@ -659,6 +701,25 @@ export function createServer({
     try {
       res.json(await cinemetaPopular(type, { fetch: fetchFn }));
     } catch (e) { res.status(502).json({ error: e.message }); }
+  });
+
+  // Recently-played rows for the PWA home, enriched with posters from Cinemeta.
+  app.get('/api/history', async (_req, res) => {
+    const hist = readHistory().slice(0, 9);
+    const out = await Promise.all(hist.map(async (h) => {
+      let poster = null;
+      let name = h.title;
+      try {
+        const r = await fetchFn(`https://v3-cinemeta.strem.io/meta/${h.type}/${encodeURIComponent(h.id)}.json`);
+        if (r.ok) {
+          const d = await r.json();
+          poster = d?.meta?.poster || null;
+          if (d?.meta?.name) name = d.meta.name;
+        }
+      } catch { /* best-effort poster */ }
+      return { id: h.id, name, type: h.type, poster };
+    }));
+    res.json(out);
   });
 
   app.get('/api/meta', async (req, res) => {
@@ -738,6 +799,20 @@ export function createServer({
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ seconds: Number(req.body?.seconds) || 0 }),
+      });
+      res.status(r.ok ? 200 : r.status).end();
+    } catch (e) { res.status(502).end(); }
+  });
+
+  // Absolute volume (0–200) for the controller's volume slider. The shell
+  // already exposes /set_volume; this just proxies it.
+  app.post('/set_volume', async (req, res) => {
+    try {
+      const vol = Math.max(0, Math.min(200, Number(req.body?.volume) || 0));
+      const r = await fetchFn(`http://${shellHost}/set_volume`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ volume: vol }),
       });
       res.status(r.ok ? 200 : r.status).end();
     } catch (e) { res.status(502).end(); }
@@ -1016,6 +1091,7 @@ export function createServer({
             body: JSON.stringify({ url: stream.url, title: nowTitle }),
           }).catch(() => {});
         }
+        recordHistory({ id, title: nowTitle, type });
       }
 
       if (req.query.placeholder === '1') {
