@@ -31,6 +31,8 @@ pub struct Window {
     header: TemplateChild<adw::HeaderBar>,
     #[template_child]
     pub overlay: TemplateChild<gtk::Overlay>,
+    #[template_child]
+    pub spinner: TemplateChild<gtk::Spinner>,
     pub inhibit_request: Arc<Mutex<Option<Request<()>>>>,
 }
 

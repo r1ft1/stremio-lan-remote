@@ -344,6 +344,19 @@ impl ApplicationImpl for Application {
             }
         });
 
+        // Show a transparent spinner over the video while mpv is buffering.
+        video.connect_mpv_property_change(clone!(
+            #[weak]
+            window,
+            move |name, value| {
+                if name == "paused-for-cache"
+                    && let Some(v) = value.as_bool()
+                {
+                    window.set_buffering(v);
+                }
+            }
+        ));
+
         let deeplink = self.deeplink.clone();
         let direct_mode_for_ipc = lan_direct_mode.clone();
         webview.connect_ipc(clone!(

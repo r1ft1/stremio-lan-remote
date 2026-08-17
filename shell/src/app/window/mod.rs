@@ -41,6 +41,14 @@ impl Window {
         self.set_fullscreened(fullscreen);
     }
 
+    // Transparent centered spinner over the video while mpv is buffering
+    // (driven by the `paused-for-cache` property).
+    pub fn set_buffering(&self, on: bool) {
+        let spinner = &self.imp().spinner;
+        spinner.set_visible(on);
+        spinner.set_spinning(on);
+    }
+
     pub fn connect_monitor_info<F: Fn(i32) + 'static>(&self, callback: F) {
         self.connect_realize(move |window| {
             let display = window.display();
