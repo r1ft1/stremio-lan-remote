@@ -19,7 +19,16 @@ ADDON_DIR="$REPO/addon"
 LOG="/tmp/stremio-lan-remote-addon.log"
 
 PUBLIC_HOST="${PUBLIC_HOST:-http://steamdeck.local:7000}"
-STREAM_RESOLVER_URL="${STREAM_RESOLVER_URL:-https://torrentio.strem.fun}"
+# Real-Debrid: if a key file exists, route Torrentio through RD (direct cached
+# HTTPS streams instead of raw torrents). An explicit STREAM_RESOLVER_URL env
+# var still wins. Key file is never committed.
+RD_KEY="$(tr -d "[:space:]" < "$HOME/.config/stremio-lan-remote/realdebrid-key" 2>/dev/null || true)"
+if [ -n "$RD_KEY" ]; then
+  DEFAULT_RESOLVER="https://torrentio.strem.fun/realdebrid=$RD_KEY"
+else
+  DEFAULT_RESOLVER="https://torrentio.strem.fun"
+fi
+STREAM_RESOLVER_URL="${STREAM_RESOLVER_URL:-$DEFAULT_RESOLVER}"
 
 # Shared secret (optional). Read from the token file if present; never committed.
 TOKEN_FILE="$HOME/.config/stremio-lan-remote/token"
