@@ -183,6 +183,13 @@ impl ApplicationImpl for Application {
                         if was_direct {
                             video_for_lan.send_mpv_command("stop".to_string(), vec![]);
                         }
+                        // Stremio's web UI can set `hwdec` over IPC, so re-assert the
+                        // zero-copy preference before loading rather than inheriting
+                        // whatever the last Stremio playback left behind.
+                        video_for_lan.send_mpv_command(
+                            "set".to_string(),
+                            vec!["hwdec".to_string(), "vaapi,vaapi-copy".to_string()],
+                        );
                         video_for_lan.send_mpv_command("loadfile".to_string(), vec![url]);
                         video_for_lan.send_mpv_command("set".to_string(), vec!["pause".to_string(), "no".to_string()]);
                     }

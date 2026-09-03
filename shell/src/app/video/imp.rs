@@ -51,6 +51,18 @@ impl Default for Video {
             init.set_property("terminal", "yes")?;
             init.set_property("msg-level", msg_level)?;
             init.set_property("volume-max", 200)?;
+            // Prefer zero-copy VAAPI, falling back to vaapi-copy (and only then
+            // software). Zero-copy is worth a lot where it's available: standalone mpv
+            // on a Steam Deck OLED playing 4K AV1 measured 11.4% CPU with `vaapi` vs
+            // 34.4% with `vaapi-copy`, for the same GPU load — the copy variant pays
+            // to read frames back into system memory.
+            //
+            // NOTE: as of 2026-09-03 this resolves to vaapi-copy under `vo=libmpv`
+            // here; the GLArea render path doesn't appear to offer the interop
+            // zero-copy needs. The preference is kept because it costs nothing and
+            // takes effect automatically if that changes. Don't assume it's active —
+            // check the log for "Using hardware decoding (vaapi)" before relying on it.
+            init.set_property("hwdec", "vaapi,vaapi-copy")?;
             Ok(())
         })
         .expect("Failed to create mpv");
