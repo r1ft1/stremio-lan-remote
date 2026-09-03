@@ -8,6 +8,8 @@ Phone user opens a movie or episode in Stremio mobile, taps the "📺 Cast to De
 
 Also supports background downloads to the Deck with resume-on-restart, a "Deck Downloads" catalog, full playback control (pause / seek / volume / fullscreen / audio + subtitle track selection) from a mobile web controller, and cancel / delete inside Stremio mobile.
 
+**Casting YouTube.** Share a video from the YouTube app (or any app that shares a link) to **Deck**, and it plays on the Deck with the same controller — pause, seek, volume, tracks. mpv resolves the link with `yt-dlp`, so most streaming sites work, not just YouTube. See [YouTube and other links](#youtube-and-other-links).
+
 The mobile controller also exposes an **Exit Stremio** button (behind a confirmation prompt). When playback starts and headphones are detected on the Deck (3.5mm jack, USB headset, or Bluetooth), the initial volume is automatically set to 50%. The volume cap was raised from mpv's default 130% to 200%.
 
 ## Getting started on a Steam Deck (from source)
@@ -52,7 +54,21 @@ chmod 600 ~/.config/stremio-lan-remote/realdebrid-key
 ```
 Without a key, the addon falls back to plain torrentio (streams via the Deck's built-in BitTorrent server). *(Note: RealDebrid + torrentio is currently broken by RealDebrid's 2026 API changes — plain torrentio still works.)*
 
-### 6. Run it
+### 6. (Optional) YouTube and other links
+Casting links needs `yt-dlp` **inside the build container** (that's where the shell runs), on `PATH`:
+```bash
+distrobox-enter stremio-build -- bash -lc '
+  curl -fL -o /tmp/yt-dlp https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp_linux
+  sudo install -m 755 /tmp/yt-dlp /usr/local/bin/yt-dlp && rm /tmp/yt-dlp'
+```
+The standalone binary is used rather than the distro package because it self-updates (`sudo yt-dlp -U`) and pulls in no dependencies. Verify the download against the release's `SHA2-256SUMS` if you care to.
+
+yt-dlp also needs a **JavaScript runtime** for YouTube — without one it warns that extraction is deprecated and silently loses formats. Deno is its default, but the container already has Node:
+```bash
+mkdir -p ~/.config/yt-dlp && echo '--js-runtimes node' > ~/.config/yt-dlp/config
+```
+
+### 7. Run it
 ```bash
 ./scripts/install-steam-shortcut.sh    # adds a .desktop entry (KDE menu + "Add a Non-Steam Game")
 ```
@@ -62,7 +78,7 @@ Then in Steam → **Add a Non-Steam Game → Stremio LAN Remote**, and launch it
 ```
 This starts the player shell + the addon on port 7000. A control **token is auto-generated** at `~/.config/stremio-lan-remote/token` on first launch.
 
-### 7. (Optional) Keep the addon alive across sleep/reboot
+### 8. (Optional) Keep the addon alive across sleep/reboot
 ```bash
 mkdir -p ~/.config/systemd/user
 cp systemd/stremio-lan-remote-addon.service ~/.config/systemd/user/
@@ -71,7 +87,7 @@ systemctl --user enable --now stremio-lan-remote-addon.service
 loginctl enable-linger "$USER"
 ```
 
-### 8. Open the controller
+### 9. Open the controller
 - **On your Wi-Fi:** `http://steamdeck.local:7000/app?token=<token>` (token from the file above; use `http://<deck-lan-ip>:7000/...` if `steamdeck.local` won't resolve).
 - **Over Tailscale (HTTPS — required for Firefox/iOS):** give the addon a real cert:
   ```bash
@@ -105,6 +121,19 @@ After install, new stream entries appear on every movie / episode meta page:
 - `⬇ Download: …` — save a copy to the Deck for later.
 
 A new "Deck Downloads" carousel appears on Board / Discover for browsing what's been downloaded.
+
+### YouTube and other links
+
+Two ways to send a link to the Deck, both landing on the usual controller (pause / seek / volume / tracks):
+
+- **Share sheet (Android).** In the YouTube app, Share → **Deck**. The web app declares a [share target](https://developer.mozilla.org/en-US/docs/Web/Manifest/share_target), so it appears alongside your other apps. Titles are resolved through YouTube's oEmbed endpoint, so the controller shows the real video name.
+- **Paste a link.** The `/app` page has a "…or paste a YouTube link" box under the search field. Works on any phone.
+
+> **The share sheet entry only appears after the web app is installed**, and Android caches the manifest at install time. If you added the app to your home screen before this feature existed, remove it and re-add it from `/app`.
+>
+> **iOS can't do share targets.** Use the paste box, or make a Shortcut that opens `https://<deck>/cast_youtube?url=` with the shared URL appended.
+
+Resolution is mpv's `yt-dlp` hook, so this is not YouTube-specific — most sites yt-dlp supports will play. Requires [step 6](#6-optional-youtube-and-other-links) of the setup. Only `http`/`https` links are accepted.
 
 ## Architecture
 

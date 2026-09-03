@@ -73,7 +73,64 @@ const MANIFEST = {
     { src: '/icons/icon-192.png', sizes: '192x192', type: 'image/png', purpose: 'any maskable' },
     { src: '/icons/icon-512.png', sizes: '512x512', type: 'image/png', purpose: 'any maskable' },
   ],
+  // Puts "Deck" in Android's share sheet, so a YouTube video can be sent
+  // straight to the Deck. GET (rather than POST) keeps this a plain navigation
+  // the Express route below handles directly — no service worker involved.
+  share_target: {
+    action: '/cast_youtube',
+    method: 'GET',
+    params: { title: 'title', text: 'text', url: 'url' },
+  },
 };
+
+const HTTP_URL_RE = /https?:\/\/[^\s<>"']+/i;
+
+const YOUTUBE_HOSTS = new Set([
+  'youtube.com',
+  'm.youtube.com',
+  'music.youtube.com',
+  'youtube-nocookie.com',
+  'youtu.be',
+]);
+
+// Android share sheets are inconsistent: YouTube usually puts the link in
+// `text` alongside the video title ("Some title https://youtu.be/ID") and often
+// sends no `url` at all. Take the first http(s) URL from the most specific
+// field available. Anything that isn't http(s) is deliberately not matched —
+// this input comes from other apps, and file:// would read the Deck's disk.
+function extractSharedUrl({ url, text, title } = {}) {
+  for (const field of [url, text, title]) {
+    if (!field) continue;
+    const match = String(field).match(HTTP_URL_RE);
+    // Trim trailing punctuation picked up from surrounding prose.
+    if (match) return match[0].replace(/[.,;:)\]}]+$/, '');
+  }
+  return null;
+}
+
+function isYouTubeUrl(link) {
+  try {
+    return YOUTUBE_HOSTS.has(new URL(link).hostname.replace(/^www\./, ''));
+  } catch {
+    return false;
+  }
+}
+
+// oEmbed gives the real video title without an API key. Best-effort only: a
+// failure here must never stop the cast, it just means a less pretty label.
+async function youtubeTitle(link, fetchFn) {
+  try {
+    const res = await fetchFn(
+      `https://www.youtube.com/oembed?url=${encodeURIComponent(link)}&format=json`,
+    );
+    if (!res || !res.ok) return null;
+    const data = await res.json();
+    const title = data && data.title ? String(data.title).trim() : '';
+    return title || null;
+  } catch {
+    return null;
+  }
+}
 
 function controllerHtml(title, metaDeepLink, metaId = null, contentType = null) {
   const escapeHtml = (s) =>
@@ -405,6 +462,8 @@ function discoverHtml() {
   h1{font-size:14px;font-weight:500;color:#9a9aae;margin:0 0 10px;text-transform:uppercase;letter-spacing:.08em}
   input{width:100%;font-size:17px;padding:14px 16px;border-radius:14px;border:0;background:#1c1c22;color:#eaeaf2;font-family:inherit;-webkit-appearance:none}
   input:focus{outline:2px solid #4da3ff}
+  .linkcast{margin:8px 0 0}
+  .linkcast input{font-size:15px;padding:11px 16px;background:#17171d;color:#c9c9d8}
   .sec{font-size:13px;color:#9a9aae;margin:18px 2px 8px;text-transform:uppercase;letter-spacing:.06em}
   .grid{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}
   .card{position:relative;background:#1c1c22;border-radius:12px;overflow:hidden;cursor:pointer;-webkit-tap-highlight-color:transparent}
@@ -424,6 +483,9 @@ function discoverHtml() {
 <header>
   <h1>Deck — search &amp; cast</h1>
   <input id="q" type="search" placeholder="Search movies & shows…" autocomplete="off" autocapitalize="off">
+  <form class="linkcast" action="/cast_youtube" method="GET">
+    <input name="url" type="url" inputmode="url" placeholder="…or paste a YouTube link" autocomplete="off" autocapitalize="off" autocorrect="off">
+  </form>
 </header>
 <main id="content"></main>
 <script>
@@ -904,6 +966,30 @@ export function createServer({
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ url: stream.url, title }),
       });
+      res.set('Content-Type', 'text/html; charset=utf-8');
+      res.send(controllerHtml(title, 'stremio:///'));
+    } catch (e) {
+      res.status(502).send(e.message);
+    }
+  });
+
+  // Share-target endpoint: hand a link to mpv, which resolves it with yt-dlp.
+  // Reuses the same controller page as every other cast, so playback, seek and
+  // volume all work with no extra UI.
+  app.get('/cast_youtube', async (req, res) => {
+    try {
+      const link = extractSharedUrl(req.query);
+      if (!link) return res.status(400).send('no http(s) link found in the share');
+
+      let title = isYouTubeUrl(link) ? await youtubeTitle(link, fetchFn) : null;
+      if (!title) title = String(req.query.title || '').trim() || link;
+
+      await fetchFn(`http://${shellHost}/play_url`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url: link, title }),
+      });
+
       res.set('Content-Type', 'text/html; charset=utf-8');
       res.send(controllerHtml(title, 'stremio:///'));
     } catch (e) {
